@@ -29,6 +29,11 @@ class stablebaselineEnv(gym.Env):
 
         elif action == 2:
             pass
+
+        elif action == 3:
+            pass
+
+        # 거래 action
         pass
 
 
