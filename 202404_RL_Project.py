@@ -21,6 +21,19 @@ class stablebaselineEnv(gym.Env):
 
 
     def step(self, action):
+        if action == 0:
+            pass
+        
+        elif action == 1:
+            pass
+
+        elif action == 2:
+            pass
+
+        elif action == 3:
+            pass
+
+        # 거래 action
         pass
 
 
