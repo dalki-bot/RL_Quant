@@ -6,9 +6,9 @@ from gym import spaces
 import numpy as np
 from stable_baselines3 import PPO,DQN,A2C
 
-class StockTradingEnv(gym.Env):
+class stablebaselineEnv(gym.Env):
     def __init__(self):
-        super(StockTradingEnv, self).__init__()
+        super(stablebaselineEnv, self).__init__()
 
 
 
@@ -30,3 +30,11 @@ class StockTradingEnv(gym.Env):
         elif action == 2:
             pass
         pass
+
+
+
+
+
+
+class Agent():
+    pass
