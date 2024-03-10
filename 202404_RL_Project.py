@@ -13,21 +13,15 @@ class stablebaselineEnv(gym.Env):
         super(stablebaselineEnv, self).__init__()
         self.action_space = spaces.Discrete(4)  # 0: Long, 1: Short, 2: Close, 3: Hold
         self.observation_space = spaces.Dict({
+            "position": spaces.Discrete(3), # 포지션 {0:Long, 1:Short, 2:None}
             "chart_data": spaces.Box(low=0, high=np.inf, shape=(df.shape[0], df.shape[1]), dtype=np.float32),
-            "total_cash": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 총 금액
             "current_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 현재 가격
-            "trading_data": spaces.MultiDiscrete([
-                spaces.Discrete(3), # 포지션 {0:Long, 1:Short, 2:None}
-                spaces.Discrete(4), # 행동 {0:Long, 1:Short, 2:Close, 3:Hold}
-                spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 현재 가격
-                spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # pnl
-                spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # closing_pnl
-                spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # total_pnl
-                spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)  # total_balance
-            ]) 
-            
+            "pnl": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 현재 포지션 평가 손익
+            "closing_pnl": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 청산 손익
+            "total_pnl": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 누적 손익
+            "total_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32) # 총 자산
+
         })
-        'Box : 연속, Discrete : 이산, MultiDiscrete : 다중 이산, MultiBinary : 다중 이진, Dict : 딕셔너리'
 
         self.df = df # 전체 차트 데이터 초기화
         self.window_size = window_size # Wondow_size 초기화
@@ -179,13 +173,11 @@ class stablebaselineEnv(gym.Env):
 
 
     def step(self, action):
-        self.current_step += 1  #현재 위치를 다음 스텝으로 옮김
-       
+      
         self.current_price = random.uniform(
             self.slice_df.loc[self.current_step, 'Open'],
             self.slice_df.loc[self.current_step, 'Close']
             ) #현재 가격을 시가, 종가 사이 랜덤 값으로 결정됨.
-        #위 두개의 값을 통해 window_size만큼 obs가 됨(current_step을 가장 먼저 +1을 시켰으므로)
         
 
 
@@ -193,14 +185,13 @@ class stablebaselineEnv(gym.Env):
         reward = None
 
         self.current_index += 1  # 현재 위치를 다음 스텝으로 옮김
+        self.current_step = self.slice_df.iloc[self.current_index]
+        self.observation_df = self.next_observation()
+
         if self.current_index >=  (self.test_window_size + self.window_size)-1: # 현재 위치가 window_size + test_window_size만큼 커지게 되면 done=True로 변경
             done = True
         else:
             done = False
-
-
-        self.current_step = self.slice_df.iloc[self.current_index]
-        self.observation_df = self.next_observation()
         
 
         return obs, reward, done, {}
