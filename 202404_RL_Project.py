@@ -50,7 +50,6 @@ class stablebaselineEnv(gym.Env):
         self.fee = 0.0005 # 거래 수수료
         self.leverage = leverage # 레버리지
         self.margin = 0 # 포지션 증거금
-        self.action = None # 행동 {0:Long, 1:Short, 2:Close, 3:Hold}
         self.position = 0 # 포지션 {0:Long, 1:Short, 2:None}
 
         self.order_price = 0 # 주문 금액
@@ -111,7 +110,7 @@ class stablebaselineEnv(gym.Env):
         current_price = self.current_price # 현재 가격
         self.order_price = (self.min_order * current_price) # 주문 금액
         "추후 진입 수량 변경시에 self.order_price만 수정하면 될것같네요"
-        order_margin_price = self.order_price * self.leverage # 레버리지 포함 금액 증거금용 ex) (0.002*68000)*1=136, (0.002*68000)*2=68
+        order_margin_price = self.order_price * self.leverage # 레버리지 포함 금액 증거금 ex) (0.002*68000)*1=136, (0.002*68000)*2=68
         action = self.act_check(action)
         self.action = action
         if action == 0 and self.position is None: # Long
@@ -129,27 +128,35 @@ class stablebaselineEnv(gym.Env):
                 self.total_balance = self.usdt_balance + self.margin
                 self.position = 0
                 pass
+            
             elif self.position == 1: # Short 포지션시에 진입
                 close_fee = (self.btc_size * current_price * self.fee) # 포지션 청산
                 self.usdt_balance += self.margin + self.pnl - close_fee # 증거금, 실현 손익, 수수료
                 self.margin = 0
                 self.btc_size = 0
+                self.closing_pnl = self.pnl - close_fee
                 "보유 포지션 청산"
-                self.btc_size += self.min_order
-                self.margin += self.order_price
-                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee)
                 
+                self.btc_size += self.min_order # 포지션수 증가
+                self.margin += self.order_price # 증거금 증가
+                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee) # 잔고 차감 (수수료 및 증거금)
 
+                self.current_avg_price = (self.last_size_value + self.order_price) / self.btc_size
+                self.last_size_value = self.btc_size * current_price
 
+                self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
+                self.total_pnl += self.closing_pnl
+                self.total_balance = self.usdt_balance + self.margin
                 self.position = 0
                 "새로운 포지션 진입"
                 pass
             
         elif action == 1 and self.position is None: # Short
             if self.position == 1 or 2:
-                self.btc_size += self.min_order
-                self.margin += self.order_price
-                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee)
+                self.btc_size += self.min_order # 포지션수 증가
+                self.margin += self.order_price # 증거금 증가
+                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee) # 잔고 차감 (수수료 및 증거금)
+
                 self.current_avg_price = (self.last_size_value + self.order_price) / self.btc_size
                 self.last_size_value = self.btc_size * current_price
 
@@ -157,21 +164,26 @@ class stablebaselineEnv(gym.Env):
                 self.closing_pnl = 0
                 self.total_pnl += self.closing_pnl
                 self.total_balance = self.usdt_balance + self.margin
-
                 self.position = 1
                 pass
             elif self.position == 0:
-                close_fee = (self.btc_size * current_price * self.fee)
-                self.usdt_balance += self.margin
-                self.usdt_balance -= close_fee
+                close_fee = (self.btc_size * current_price * self.fee) # 포지션 청산
+                self.usdt_balance += self.margin + self.pnl - close_fee # 증거금, 실현 손익, 수수료
                 self.margin = 0
                 self.btc_size = 0
+                self.closing_pnl = self.pnl - close_fee
                 "보유 포지션 청산"
-                self.btc_size += self.min_order
-                self.margin += self.order_price
-                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee)
+                
+                self.btc_size += self.min_order # 포지션수 증가
+                self.margin += self.order_price # 증거금 증가
+                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee) # 잔고 차감 (수수료 및 증거금)
 
+                self.current_avg_price = (self.last_size_value + self.order_price) / self.btc_size
+                self.last_size_value = self.btc_size * current_price
 
+                self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
+                self.total_pnl += self.closing_pnl
+                self.total_balance = self.usdt_balance + self.margin
                 self.position = 1
                 "새로운 포지션 진입"
                 pass
@@ -182,12 +194,29 @@ class stablebaselineEnv(gym.Env):
             self.usdt_balance -= close_fee
             self.margin = 0
             self.btc_size = 0
-
-
+            
+            self.closing_pnl = self.pnl - close_fee
+            self.pnl = 0
+            self.total_pnl += self.closing_pnl
+            self.total_balance = self.usdt_balance + self.margin
             self.position = 2
             pass
         if action == 3 and self.position is not None: # Hold
-            pass
+            if self.position == 0 or 1: # 포지션 보유중
+                self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
+                self.closing_pnl = 0
+                self.total_pnl += self.closing_pnl
+                self.total_balance = self.usdt_balance + self.margin
+                pass
+            
+            elif self.position == 2: # 포지션 없음
+                self.pnl = 0
+                self.closing_pnl = 0
+                self.total_pnl += self.closing_pnl
+                self.total_balance = self.usdt_balance + self.margin
+                pass
+            
+        return self.position, self.action, self.pnl, self.closing_pnl, self.total_pnl, self.total_balance
         
         '''
         주문 수량은 일단 항상 최소 주문 금액으로 하겠습니다.
