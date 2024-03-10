@@ -13,6 +13,7 @@ class stablebaselineEnv(gym.Env):
         super(stablebaselineEnv, self).__init__()
         self.action_space = spaces.Discrete(4)  # 0: Long, 1: Short, 2: Close, 3: Hold
         self.observation_space = spaces.Dict({
+            "action": spaces.Discrete(4), # 행동 {0:Long, 1:Short, 2:Close, 3:Hold}
             "position": spaces.Discrete(3), # 포지션 {0:Long, 1:Short, 2:None}
             "chart_data": spaces.Box(low=0, high=np.inf, shape=(df.shape[0], df.shape[1]), dtype=np.float32),
             "current_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 현재 가격
@@ -49,6 +50,7 @@ class stablebaselineEnv(gym.Env):
         self.fee = 0.0005 # 거래 수수료
         self.leverage = leverage # 레버리지
         self.margin = 0 # 포지션 증거금
+        self.action = None # 행동 {0:Long, 1:Short, 2:Close, 3:Hold}
         self.position = 0 # 포지션 {0:Long, 1:Short, 2:None}
 
         self.order_price = 0 # 주문 금액
@@ -111,7 +113,7 @@ class stablebaselineEnv(gym.Env):
         "추후 진입 수량 변경시에 self.order_price만 수정하면 될것같네요"
         order_margin_price = self.order_price * self.leverage # 레버리지 포함 금액 증거금용 ex) (0.002*68000)*1=136, (0.002*68000)*2=68
         action = self.act_check(action)
-
+        self.action = action
         if action == 0 and self.position is None: # Long
             if self.position == 0 or 2: # Long or None 포지션시에 진입
                 self.btc_size += self.min_order # 포지션수 증가
@@ -125,20 +127,18 @@ class stablebaselineEnv(gym.Env):
                 self.closing_pnl = 0
                 self.total_pnl += self.closing_pnl
                 self.total_balance = self.usdt_balance + self.margin
-                
-
                 self.position = 0
                 pass
             elif self.position == 1: # Short 포지션시에 진입
                 close_fee = (self.btc_size * current_price * self.fee) # 포지션 청산
-                self.usdt_balance += self.margin
-                self.usdt_balance -= close_fee
+                self.usdt_balance += self.margin + self.pnl - close_fee # 증거금, 실현 손익, 수수료
                 self.margin = 0
                 self.btc_size = 0
                 "보유 포지션 청산"
                 self.btc_size += self.min_order
                 self.margin += self.order_price
                 self.usdt_balance -= order_margin_price + (order_margin_price * self.fee)
+                
 
 
                 self.position = 0
@@ -150,7 +150,13 @@ class stablebaselineEnv(gym.Env):
                 self.btc_size += self.min_order
                 self.margin += self.order_price
                 self.usdt_balance -= order_margin_price + (order_margin_price * self.fee)
+                self.current_avg_price = (self.last_size_value + self.order_price) / self.btc_size
+                self.last_size_value = self.btc_size * current_price
 
+                self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
+                self.closing_pnl = 0
+                self.total_pnl += self.closing_pnl
+                self.total_balance = self.usdt_balance + self.margin
 
                 self.position = 1
                 pass
@@ -187,6 +193,7 @@ class stablebaselineEnv(gym.Env):
         주문 수량은 일단 항상 최소 주문 금액으로 하겠습니다.
         최소 수량으로 해도 0.002개 이고 1배율일 경우 증거금 136usdt 정도 들어갑니다.
         
+        추후 수량이 커질시 미결손실 또한 고려해야함
         '''
 
 
