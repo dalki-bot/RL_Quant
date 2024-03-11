@@ -7,6 +7,7 @@ import numpy as np
 from stable_baselines3 import PPO,DQN,A2C
 from stable_baselines3.common.env_util import make_vec_env
 import mplfinance as mpf
+import ta
 
 class stablebaselineEnv(gym.Env):
     def __init__(self,df, window_size, test_window_size, usdt_balance=1000, btc_size=0, leverage=1): 
@@ -23,13 +24,9 @@ class stablebaselineEnv(gym.Env):
             "total_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32) # 총 자산
 
         })
-
-        self.df = df # 전체 차트 데이터 초기화
-        self.window_size = window_size # Wondow_size 초기화
-        self.test_window_size = test_window_size # test_window_size 초기화
     
-        self.slice_df, self.observation_df, self.train_df = stablebaselineEnv.generate_random_data_slice(self.df, self.window_size,self.test_window_size) # 랜덤 위치로 slice된 차트 데이터 초기화
-        self.current_step = self.slice_df.iloc[self.window_size-2] #음.. 위치가 애매함-> 이 상태로 설정시 current_step은 self.observation_df의 마지막 행에 해당됨.
+        self.slice_df, self.observation_df, self.train_df = stablebaselineEnv.generate_random_data_slice(df, window_size,test_window_size) # 랜덤 위치로 slice된 차트 데이터 초기화
+        self.current_step = self.slice_df.iloc[window_size-2] #음.. 위치가 애매함-> 이 상태로 설정시 current_step은 self.observation_df의 마지막 행에 해당됨.
         """
         할 일
 
@@ -63,6 +60,16 @@ class stablebaselineEnv(gym.Env):
 
     def reset(self): # 리셋 함수 -> ㅇ
         self.slice_df = stablebaselineEnv.generate_random_data_slice(self.df, self.window_size,self.test_window_size) # reset 하며 새로운 랜덤 차트 데이터 초기화
+        self.observation_space = spaces.Dict({
+            "action": spaces.Discrete(4), # 행동 {0:Long, 1:Short, 2:Close, 3:Hold}
+            "position": spaces.Discrete(3), # 포지션 {0:Long, 1:Short, 2:None}
+            "chart_data": spaces.Box(low=0, high=np.inf, shape=(df.shape[0], df.shape[1]), dtype=np.float32),
+            "current_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 현재 가격
+            "pnl": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 미실현 손익
+            "closing_pnl": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 실현 손익
+            "total_pnl": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32), # 누적 손익
+            "total_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32) # 총 자산       
+             })
         pass
     
 
@@ -113,7 +120,7 @@ class stablebaselineEnv(gym.Env):
         order_margin_price = self.order_price * self.leverage # 레버리지 포함 금액 증거금 ex) (0.002*68000)*1=136, (0.002*68000)*2=68
         action = self.act_check(action)
         self.action = action
-        if action == 0 and self.position is None: # Long
+        if action == 0: # Long
             if self.position == 0 or 2: # Long or None 포지션시에 진입
                 self.btc_size += self.min_order # 포지션수 증가
                 self.margin += self.order_price # 증거금 증가
@@ -151,7 +158,7 @@ class stablebaselineEnv(gym.Env):
                 "새로운 포지션 진입"
                 pass
             
-        elif action == 1 and self.position is None: # Short
+        elif action == 1 # Short
             if self.position == 1 or 2:
                 self.btc_size += self.min_order # 포지션수 증가
                 self.margin += self.order_price # 증거금 증가
@@ -188,7 +195,7 @@ class stablebaselineEnv(gym.Env):
                 "새로운 포지션 진입"
                 pass
 
-        elif action == 2 and self.position is None: # Close
+        elif action == 2: # Close
             close_fee = (self.btc_size * current_price * self.fee)
             self.usdt_balance += self.margin
             self.usdt_balance -= close_fee
@@ -201,7 +208,7 @@ class stablebaselineEnv(gym.Env):
             self.total_balance = self.usdt_balance + self.margin
             self.position = 2
             pass
-        if action == 3 and self.position is not None: # Hold
+        if action == 3: # Hold
             if self.position == 0 or 1: # 포지션 보유중
                 self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
                 self.closing_pnl = 0
@@ -253,23 +260,60 @@ class stablebaselineEnv(gym.Env):
 
 
 
-    def render(self):
-      # Pandas DataFrame으로 변환하고, 날짜를 인덱스로 설정
-        df['Date'] = pd.to_datetime(df['Date'])
-        df.set_index('Date', inplace=True)
+    def render(self, render_mode = None):
+        # 렌더모드를 휴먼으로 진행시에만 렌더링이 가능하도록 진행
+        if render_mode == "human":
 
-        # 시장 색상 정의
-        mc = mpf.make_marketcolors(up='red', down='blue', inherit=True)
-
-        # 스타일 생성
-        s = mpf.make_mpf_style(marketcolors=mc)
-
-        # 캔들스틱 차트 그리기
-        mpf.plot(df, type='candle', style=s,
-                title='Custom Candlestick Chart',
-                ylabel='Price ($)')
+            # 여러 보조지표들을 추가하여 그래프에 함께 그리고자 할때,
+            # 보조지표가 추가되거나 수정되거나 진행 후 렌더링을 하고자 하면 수정 해야함
+            ma_line = go.Scatter(x=df['Date'], y=df['MA20'], mode='lines', name='MA 20', yaxis='y2')
+            upper_band = go.Scatter(x=df['Date'], y=df['Upper'], mode='lines', name='Upper Band', line=dict(width=1),yaxis='y2')
+            lower_band = go.Scatter(x=df['Date'], y=df['Lower'], mode='lines', name='Lower Band', line=dict(width=1),yaxis='y2')
+            net_worth_line = go.Scatter(x=df['Date'], y=df['Net_Worth'], mode='lines', name='Net Worth',line=dict(color='gold'), yaxis='y')
 
 
+            # Net worth (예제 계산) -수정 되어야함
+            df['Net_Worth'] = df['Close'].cumsum() / 1000  # 예시 계산입니다
+
+            # action 값을 순서대로 따로 저장 해뒀다가 차트그래프와 함께 플랏하는식으로 진행 되어야 할듯. -수정 요망
+            df['action'] = np.random.randint(0, 4, df.shape[0])  # 0부터 3까지의 값
+
+            # 캔들스틱
+            candle = go.Candlestick(x=df['Date'],open=df['Open'],high=df['High'],low=df['Low'],close=df['Close'],increasing_line_color='red', decreasing_line_color='blue',yaxis='y2')
+
+
+            # 'action' 값에 따른 마커 추가
+            # 롱, 숏, 정산 이미지에 대한 내용들
+            shapes = []
+
+            # Action 0에 대한 설정
+            df_filtered_0 = df[df['action'] == 0]
+            marker_0 = go.Scatter(x=df_filtered_0['Date'], y=df_filtered_0['Close'], mode='markers', name='Action 0',marker_symbol='triangle-up', marker_color='red', yaxis='y2')
+            shapes.append(marker_0)
+
+            # Action 1에 대한 설정
+            df_filtered_1 = df[df['action'] == 1]
+            marker_1 = go.Scatter(x=df_filtered_1['Date'], y=df_filtered_1['Close'], mode='markers', name='Action 1',marker_symbol='triangle-down', marker_color='blue', yaxis='y2')
+            shapes.append(marker_1)
+
+            # Action 2에 대한 설정
+            df_filtered_2 = df[df['action'] == 2]
+            marker_2 = go.Scatter(x=df_filtered_2['Date'], y=df_filtered_2['Close'], mode='markers', name='Action 2',marker_symbol='circle', marker_color='green', yaxis='y2')
+            shapes.append(marker_2)
+            # 모든 플롯 결합 (action=3에 대해서는 아무 것도 추가하지 않음)
+            fig = go.Figure(data=[candle, ma_line, upper_band, lower_band, net_worth_line] + shapes)
+
+
+            # 레이아웃 업데이트
+            fig.update_layout(
+                xaxis=dict(domain=[0.7, 0.7]),
+                yaxis=dict(title='Net Worth', side='right', overlaying='y2'),
+                yaxis2=dict(title='Price', side='left'),
+                title='Candlestick Chart with Indicators and Secondary Y-Axis for Net Worth',
+                template='plotly_dark'
+            )
+
+            fig.show()
 
 
 
@@ -278,13 +322,39 @@ class stablebaselineEnv(gym.Env):
 
 
 
+    # 여러가지 보조지표들을 추가하는 함수, 보조지표들을 넣고 싶다면 여기서 수정 진행
+    def add_indicator(self,df):
+        # RSI & ADX 보조지표 추가
+        df['RSI'] = ta.momentum.rsi(df['Close'])
+        df['ADX'] = ta.trend.adx(df['High'], df['Low'], df['Close'])
+
+        # # 단순 이동평균선 추가
+        df['SMA_10'] = ta.trend.sma_indicator(df['Close'], window=10)
+        df['SMA_20'] = ta.trend.sma_indicator(df['Close'], window=20)
+
+        # 지수 이동평균선 추가
+        # df['EMA_10'] = ta.trend.ema_indicator(df['Close'], window=10)
+        # df['EMA_20'] = ta.trend.ema_indicator(df['Close'], window=20)
+
+        # 볼린저 밴드 추가
+        bollinger = ta.volatility.BollingerBands(close=df['Close'], window=20, window_dev=2)
+        df['Bollinger_High'] = bollinger.bollinger_hband()
+        # df['Bollinger_Mid'] = bollinger.bollinger_mavg() #window가 20일 때 20일선과 같은것으로 알고 있음
+        df['Bollinger_Low'] = bollinger.bollinger_lband()
 
 
+    # 노멀라이즈 진행함, 노멀라이즈 진행 시 날짜 정보는 제외됨. 학습에 넣을지 말지는 추후 협의
+    def normalization(self, df):
+        # Date 열 제거
+        df = df.drop(['Date'], axis=1)
 
+        # Volume 열에 대해 로그 변환 수행 (거래량의 경우 많은날은 너무 값이 튀어서 문제가 생길 수 있다고 판단되어 로그 스케일로 진행)
+        df['Volume'] = np.log(df['Volume'])
 
+        # 로그 변환된 Volume과 다른 열들에 대해 정규화 수행
+        normalized_df = (df - df.min()) / (df.max() - df.min())
 
-
-
+        return normalized_df
 
 
 
