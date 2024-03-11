@@ -26,7 +26,11 @@ class stablebaselineEnv(gym.Env):
         })
     
         self.slice_df, self.observation_df, self.train_df = stablebaselineEnv.generate_random_data_slice(df, window_size,test_window_size) # 랜덤 위치로 slice된 차트 데이터 초기화
-        self.current_step = self.slice_df.iloc[window_size-2] #음.. 위치가 애매함-> 이 상태로 설정시 current_step은 self.observation_df의 마지막 행에 해당됨.
+        self.chart_data = spaces.Box(low=0, high=np.inf, shape=(df.shape[0], df.shape[1]), dtype=np.float32)
+        self.current_index = window_size
+        self.current_step = self.slice_df.iloc[window_size]  # 음.. 위치가 애매함-> 이 상태로 설정시 current_step은 self.observation_df의 마지막 행에 해당됨.
+        self.current_price = None
+
         """
         할 일
 
@@ -37,9 +41,7 @@ class stablebaselineEnv(gym.Env):
         render 함수 만들기.(가시화)
         
                 
-        """
-
-        #self.portfolio = None ## 추후 수정 예정
+        """       
         self.usdt_balance = usdt_balance # 초기 usdt 잔고
         self.initial_usdt_balance = usdt_balance 
         self.btc_size = btc_size # 포지션 수량
@@ -73,158 +75,156 @@ class stablebaselineEnv(gym.Env):
         pass
     
 
-    # action = 0: Long, 1: Short, 2: Close, 3: Hold
-    # position =  0: Long_position, 1: Short_position, 2: None_position
+    # action : 0=Long, 1=Short, 2=Close, 3=Hold
+    # position : 0=Long, 1=Short, 2=None
     # ex) (0.002*68000)/1=136, (0.002*68000)/2=68 필요 증거금 계산 예시 #
-    def act_check(self, action): # action을 수행할 수 있는 최소한의 조건 확인
-        current_price = self.current_price
-        min_order = (self.min_order * current_price) / self.leverage # 레버리지 포함 주문수량
-        fee = min_order * self.fee
-        usdt_margin_balance = self.usdt_balance + self.margin
-        if action == 0: # Long
-            if self.position == 0 or 2:
-                if self.usdt_balance > min_order + fee: # 현재 usdt만 계산
+    
+    # 나중에 수량지정을 위한 함수 (min_order부분만 바꾸면됌)
+    def cac_order_size(self): 
+        order_size = self.min_order
+        return order_size
+    
+    # action을 수행할 수 있는 최소한의 조건 확인
+    def act_check(self, action): 
+        # Long
+        if action == 0: 
+            # Long or None
+            if self.position == 0 or 2: 
+                required_margin = (self.cac_order_size() * self.current_price) / self.leverage
+                if self.usdt_balance > required_margin:
                     return 0
                 else:
                     return 3
-            elif self.position == 1:
-                if usdt_margin_balance > min_order + fee: # 반대 포지션 청산후 추가되는 증거금 포함해서 계산
+            # Short
+            elif self.position == 1: 
+                required_margin = (self.cac_order_size() * self.current_price) / self.leverage
+                if self.usdt_balance + self.margin + self.pnl > required_margin:
                     return 0
                 else:
                     return 3
-
-        elif action == 1: # Short
-            if self.position == 1 or 2:
-                if self.usdt_balance > min_order + fee:
+        # Short        
+        elif action == 1: 
+            # Short or None
+            if self.position == 1 or 2: 
+                required_margin = (self.cac_order_size() * self.current_price) / self.leverage
+                if self.usdt_balance > required_margin:
                     return 1
                 else:
-                    return 3
-                
+                    return 3   
+             # Long                 
             elif self.position == 0:
-                if usdt_margin_balance > min_order + fee:
+                required_margin = (self.cac_order_size() * self.current_price) / self.leverage
+                if self.usdt_balance + self.margin + self.pnl > required_margin:
                     return 1
                 else:
                     return 3
-            
-        elif action == 2: # Close
-            if self.position == 2:
+        # Close    
+        elif action == 2: 
+            # Long or Short
+            if self.position == 0 or 1:
+                return 2
+            # None
+            elif self.position == 2:
                 return 3
-            
-        else: # Hold
+        # Hold        
+        elif action == 3: 
             return 3
 
-    def act(self, action):
-        current_price = self.current_price # 현재 가격
-        self.order_price = (self.min_order * current_price) # 주문 금액
-        "추후 진입 수량 변경시에 self.order_price만 수정하면 될것같네요"
-        order_margin_price = self.order_price * self.leverage # 레버리지 포함 금액 증거금 ex) (0.002*68000)*1=136, (0.002*68000)*2=68
-        action = self.act_check(action)
-        self.action = action
-        if action == 0: # Long
-            if self.position == 0 or 2: # Long or None 포지션시에 진입
-                self.btc_size += self.min_order # 포지션수 증가
-                self.margin += self.order_price # 증거금 증가
-                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee) # 잔고 차감 (수수료 및 증거금)
-
-                self.current_avg_price = (self.last_size_value + self.order_price) / self.btc_size
-                self.last_size_value = self.btc_size * current_price
-
-                self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
-                self.closing_pnl = 0
-                self.total_pnl += self.closing_pnl
-                self.total_balance = self.usdt_balance + self.margin
-                self.position = 0
-                pass
+    # 포지션 진입
+    def open_position(self, action):
+        order_size = self.cac_order_size() # 주문 수량 계산
+        required_margin = (order_size * self.current_price) / self.leverage # 필요 증거금 계산
+        fee = order_size * self.current_price * self.fee # 수수료 계산
+        if action == 0:
+            self.usdt_balance -= required_margin + fee
+            self.btc_size += order_size
+            self.margin += required_margin
             
-            elif self.position == 1: # Short 포지션시에 진입
-                close_fee = (self.btc_size * current_price * self.fee) # 포지션 청산
-                self.usdt_balance += self.margin + self.pnl - close_fee # 증거금, 실현 손익, 수수료
-                self.margin = 0
-                self.btc_size = 0
-                self.closing_pnl = self.pnl - close_fee
-                "보유 포지션 청산"
-                
-                self.btc_size += self.min_order # 포지션수 증가
-                self.margin += self.order_price # 증거금 증가
-                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee) # 잔고 차감 (수수료 및 증거금)
-
-                self.current_avg_price = (self.last_size_value + self.order_price) / self.btc_size
-                self.last_size_value = self.btc_size * current_price
-
-                self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
-                self.total_pnl += self.closing_pnl
-                self.total_balance = self.usdt_balance + self.margin
-                self.position = 0
-                "새로운 포지션 진입"
-                pass
-            
-        elif action == 1 # Short
-            if self.position == 1 or 2:
-                self.btc_size += self.min_order # 포지션수 증가
-                self.margin += self.order_price # 증거금 증가
-                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee) # 잔고 차감 (수수료 및 증거금)
-
-                self.current_avg_price = (self.last_size_value + self.order_price) / self.btc_size
-                self.last_size_value = self.btc_size * current_price
-
-                self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
-                self.closing_pnl = 0
-                self.total_pnl += self.closing_pnl
-                self.total_balance = self.usdt_balance + self.margin
-                self.position = 1
-                pass
-            elif self.position == 0:
-                close_fee = (self.btc_size * current_price * self.fee) # 포지션 청산
-                self.usdt_balance += self.margin + self.pnl - close_fee # 증거금, 실현 손익, 수수료
-                self.margin = 0
-                self.btc_size = 0
-                self.closing_pnl = self.pnl - close_fee
-                "보유 포지션 청산"
-                
-                self.btc_size += self.min_order # 포지션수 증가
-                self.margin += self.order_price # 증거금 증가
-                self.usdt_balance -= order_margin_price + (order_margin_price * self.fee) # 잔고 차감 (수수료 및 증거금)
-
-                self.current_avg_price = (self.last_size_value + self.order_price) / self.btc_size
-                self.last_size_value = self.btc_size * current_price
-
-                self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
-                self.total_pnl += self.closing_pnl
-                self.total_balance = self.usdt_balance + self.margin
-                self.position = 1
-                "새로운 포지션 진입"
-                pass
-
-        elif action == 2: # Close
-            close_fee = (self.btc_size * current_price * self.fee)
-            self.usdt_balance += self.margin
-            self.usdt_balance -= close_fee
-            self.margin = 0
-            self.btc_size = 0
-            
-            self.closing_pnl = self.pnl - close_fee
-            self.pnl = 0
-            self.total_pnl += self.closing_pnl
+            self.order_price = order_size * self.current_price
+            self.current_avg_price = (self.order_price + self.last_size_value) / self.btc_size
+            self.last_size_value = self.btc_size * self.current_price
+                            
+            self.pnl = (self.current_price - self.current_avg_price) * self.btc_size * self.leverage
+            self.closing_pnl = 0
+            self.total_pnl += self.pnl
             self.total_balance = self.usdt_balance + self.margin
-            self.position = 2
-            pass
-        if action == 3: # Hold
-            if self.position == 0 or 1: # 포지션 보유중
-                self.pnl = (self.btc_size * self.current_avg_price) - (self.btc_size * current_price)
-                self.closing_pnl = 0
-                self.total_pnl += self.closing_pnl
-                self.total_balance = self.usdt_balance + self.margin
-                pass
             
-            elif self.position == 2: # 포지션 없음
-                self.pnl = 0
-                self.closing_pnl = 0
-                self.total_pnl += self.closing_pnl
-                self.total_balance = self.usdt_balance + self.margin
-                pass
+            self.position = 0
+            return
+        elif action == 1:
+            self.usdt_balance -= required_margin + fee
+            self.btc_size += order_size
+            self.margin += required_margin
             
-        return self.position, self.action, self.pnl, self.closing_pnl, self.total_pnl, self.total_balance
-        
+            self.order_price = order_size * self.current_price
+            self.current_avg_price = (self.order_price + self.last_size_value) / self.btc_size
+            self.last_size_value = self.btc_size * self.current_price
+                            
+            self.pnl = (self.current_avg_price - self.current_price) * self.btc_size * self.leverage
+            self.closing_pnl = 0
+            self.total_pnl += self.pnl
+            self.total_balance = self.usdt_balance + self.margin
+            
+            self.position = 1
+            return
+    def act(self, action):
+        action = self.act_check(action) # action을 수행할 수 있는 최소한의 조건 확인
+        # Long
+        if action == 0:
+            # Long or None 일때 Long 진입 or 추가
+            if self.position == 0 or 2:
+                self.open_position(action)
+                pass
+            # Short 일때 청산 후 Long 진입
+            elif self.position == 1: 
+                # 보유 포지션 청산
+                closing_fee = self.btc_size * self.current_price * self.fee # 수수료 계산
+                self.usdt_balance += self.margin + self.pnl - closing_fee # 증거금 + 미실현 손익 - 수수료
+                self.btc_size = 0
+                self.margin = 0
+                
+                # 포지션 진입
+                self.open_position(action)
+                pass
+                
+        # Short    
+        elif action == 1:
+            # Short or None 일때 Short 진입 or 추가
+            if self.position == 1 or 2:
+                self.open_position(action)
+                pass
+            # Long 일때 청산 후 Short 진입
+            elif self.position == 0: 
+                closing_fee = self.btc_size * self.current_price * self.fee # 수수료 계산
+                self.usdt_balance += self.margin + self.pnl - closing_fee # 증거금 + 미실현 손익 - 수수료
+                self.btc_size = 0
+                self.margin = 0
+                
+                # 포지션 진입
+                self.open_position(action)
+                pass
+        # Close    
+        elif action == 2:
+            # Long
+            if self.position == 0: 
+                
+            # Short    
+            elif self.position == 1: 
+                
+        # Hold    
+        elif action == 3: # Hold
+            # Long
+            if self.position == 0:
+                
+            # Short    
+            elif self.position == 1: 
+                
+            # None
+            elif self.position == 2:
+
+
+
+        pass
         '''
         주문 수량은 일단 항상 최소 주문 금액으로 하겠습니다.
         최소 수량으로 해도 0.002개 이고 1배율일 경우 증거금 136usdt 정도 들어갑니다.
@@ -234,26 +234,25 @@ class stablebaselineEnv(gym.Env):
 
 
     def step(self, action):
-      
         self.current_price = random.uniform(
-            self.slice_df.loc[self.current_step, 'Open'],
-            self.slice_df.loc[self.current_step, 'Close']
-            ) #현재 가격을 시가, 종가 사이 랜덤 값으로 결정됨.
+            self.slice_df.iloc[self.current_index]['Open'],
+            self.slice_df.iloc[self.current_index]['Close']
+        ) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정됨.
+
         
-
-
+        self.act(action) # action을 수행함.
 
         reward = None
+        obs = None
 
         self.current_index += 1  # 현재 위치를 다음 스텝으로 옮김
         self.current_step = self.slice_df.iloc[self.current_index]
         self.observation_df = self.next_observation()
 
-        if self.current_index >=  (self.test_window_size + self.window_size)-1: # 현재 위치가 window_size + test_window_size만큼 커지게 되면 done=True로 변경
+        if self.current_index >= (test_window_size + window_size) - 1:  # 현재 위치가 window_size + test_window_size만큼 커지게 되면 done=True로 변경
             done = True
         else:
             done = False
-        
 
         return obs, reward, done, {}
 
@@ -392,16 +391,9 @@ df_path = pd.DataFrame # 각자 .csv파일 경로 지정하는 식으로 (ex:"D:
 
 
 
-# 테스트용으로 임시적으로 data를 만들어서 진행 해볼 예정
-data = [[i + j for j in range(5)] for i in range(1, 1000 + 1)]
-temp_test_df =  pd.DataFrame(data, columns=[f"Column_{i+1}" for i in range(5)])
-temp_env = stablebaselineEnv(temp_test_df,window_size,test_window_size)
-##########################################################################
 
+# # 신경망 모델을 만듬 - MultiInputPolicy(stable baseline에서 신경망 구조 알아서 만들어줌), env: 환경을 받아옴, verbose: log print 양 결정(0:전체,1:심플,2:제외)
+# env = make_vec_env(lambda: stablebaselineEnv(), n_envs=1)
 
-
-# 신경망 모델을 만듬 - MultiInputPolicy(stable baseline에서 신경망 구조 알아서 만들어줌), env: 환경을 받아옴, verbose: log print 양 결정(0:전체,1:심플,2:제외)
-env = make_vec_env(lambda: stablebaselineEnv(), n_envs=1)
-
-model = PPO("MultiInputPolicy", env, verbose=1) 
-obs = env.reset()
+# model = PPO("MultiInputPolicy", env, verbose=1) 
+# obs = env.reset()
