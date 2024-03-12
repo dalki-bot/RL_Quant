@@ -89,7 +89,7 @@ class stablebaselineEnv(gym.Env):
         # Long
         if action == 0: 
             # Long or None
-            if self.position == 0 or self.position == 2: 
+            if self.position == 0 or self.position == 2 or self.position == None: 
                 required_margin = (self.cac_order_size() * self.current_price) / self.leverage
                 if self.usdt_balance > required_margin:
                     return 0
@@ -105,7 +105,7 @@ class stablebaselineEnv(gym.Env):
         # Short        
         elif action == 1: 
             # Short or None
-            if self.position == 1 or self.position == 2: 
+            if self.position == 1 or self.position == 2 or self.position == None: 
                 required_margin = (self.cac_order_size() * self.current_price) / self.leverage
                 if self.usdt_balance > required_margin:
                     return 1
@@ -124,19 +124,19 @@ class stablebaselineEnv(gym.Env):
             if self.position == 0 or self.position == 1:
                 return 2
             # None
-            elif self.position == 2:
+            else:
                 return 3
         # Hold        
-        elif action == 3: 
+        elif action == 3 or self.position == None: 
             return 3
 
     # 포지션 진입
     def open_position(self, action, closing_pnl=0):
         order_size = self.cac_order_size()
         required_margin = (order_size * self.current_price) / self.leverage
-        fee = order_size * self.current_price * self.fee
+        open_fee = order_size * self.current_price * self.fee
         
-        self.usdt_balance -= required_margin + fee
+        self.usdt_balance -= required_margin + open_fee
         self.btc_size += order_size
         self.margin += required_margin
         
@@ -151,38 +151,47 @@ class stablebaselineEnv(gym.Env):
             
         self.closing_pnl = closing_pnl
         self.total_pnl += closing_pnl
-        self.total_balance = self.usdt_balance + self.margin + self.pnl
+        self.total_balance = self.usdt_balance + self.margin
         self.position = action
         
     def close_position(self):
         closing_fee = self.btc_size * self.current_price * self.fee
-        closing_pnl = self.pnl
-        self.usdt_balance += self.margin + closing_pnl - closing_fee
+        if self.position == 0:
+            closing_pnl = (self.current_price - self.current_avg_price) * self.btc_size * self.leverage
+        elif self.position == 1:
+            closing_pnl = (self.current_avg_price - self.current_price) * self.btc_size * self.leverage
+        closing_pnl -= closing_fee
+        self.last_size_value = 0
+        self.usdt_balance += self.margin + closing_pnl
         self.total_pnl += closing_pnl
         self.btc_size = 0
         self.margin = 0
         self.pnl = 0
+        self.total_balance = self.usdt_balance + self.margin
         self.position = 2
         return closing_pnl
 
     def act(self, action):
         action = self.act_check(action)
-        self.action = action
+        self.real_action = action
         # Long
         if action == 0:
             # Long or None 일때 Long 진입 or 추가
-            if self.position == 0 or self.position == 2:
+            if self.position == 0 or self.position == 2 or self.position == None:
                 self.open_position(action)
+                pass
             # Short 일때 청산 후 Long 진입
             elif self.position == 1:
                 closing_pnl = self.close_position()
                 self.open_position(action, closing_pnl)
-                    
+                pass
         # Short    
         elif action == 1:
             # Short or None 일때 Short 진입 or 추가
-            if self.position == 1 or self.position ==  2:
+            if self.position == 1 or self.position == 2 or self.position == None:
                 self.open_position(action)
+                pass
+
             # Long 일때 청산 후 Short 진입
             elif self.position == 0:
                 closing_pnl = self.close_position()
@@ -190,7 +199,7 @@ class stablebaselineEnv(gym.Env):
                 
         # Close    
         elif action == 2:
-            if self.position == 0 or self.position ==  1:
+            if self.position == 0 or self.position == 1:
                 self.close_position()
             else:
                 pass
@@ -200,13 +209,14 @@ class stablebaselineEnv(gym.Env):
             # Long
             if self.position == 0:
                 self.pnl = (self.current_price - self.current_avg_price) * self.btc_size * self.leverage
-                self.total_balance = self.usdt_balance + self.margin + self.pnl
+                self.total_balance = self.usdt_balance + self.margin
             # Short    
             elif self.position == 1:
                 self.pnl = (self.current_avg_price - self.current_price) * self.btc_size * self.leverage
-                self.total_balance = self.usdt_balance + self.margin + self.pnl
+                self.total_balance = self.usdt_balance + self.margin
             # None
-            elif self.position == 2:
+            elif self.position == 2 or self.position == None:
+                self.total_balance = self.usdt_balance + self.margin
                 pass
         '''
         주문 수량은 일단 항상 최소 주문 금액으로 하겠습니다.
