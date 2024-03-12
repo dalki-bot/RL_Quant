@@ -148,7 +148,6 @@ class stablebaselineEnv(gym.Env):
             self.closing_pnl = 0
             self.total_pnl += self.pnl
             self.total_balance = self.usdt_balance + self.margin
-            
             self.position = 0
             return
         elif action == 1:
@@ -164,9 +163,11 @@ class stablebaselineEnv(gym.Env):
             self.closing_pnl = 0
             self.total_pnl += self.pnl
             self.total_balance = self.usdt_balance + self.margin
-            
             self.position = 1
             return
+        
+    def close_position(self):
+    
     def act(self, action):
         action = self.act_check(action) # action을 수행할 수 있는 최소한의 조건 확인
         # Long
@@ -207,7 +208,15 @@ class stablebaselineEnv(gym.Env):
         elif action == 2:
             # Long
             if self.position == 0: 
+                closing_fee = self.btc_size * self.current_price * self.fee # 수수료 계산
+                self.usdt_balance += self.margin + self.pnl - closing_fee # 증거금 + 미실현 손익 - 수수료
+                self.btc_size = 0
+                self.margin = 0
                 
+                self.pnl = (self.current_avg_price - self.current_price) * self.btc_size * self.leverage
+                self.closing_pnl = 
+                self.total_pnl += self.pnl
+                self.total_balance = self.usdt_balance + self.margin
             # Short    
             elif self.position == 1: 
                 
@@ -258,57 +267,35 @@ class stablebaselineEnv(gym.Env):
 
 
 
-
-    def render(self, render_mode = None):
-        # 렌더모드를 휴먼으로 진행시에만 렌더링이 가능하도록 진행
+    def render(self, render_mode=None):
         if render_mode == "human":
+            candle = go.Candlestick(open=self.slice_df['Open'],high=self.slice_df['High'],low=self.slice_df['Low'],close=self.slice_df['Close'],increasing_line_color='red',decreasing_line_color='blue',yaxis='y2')
+            fig = go.Figure(data=[candle])
 
-            # 여러 보조지표들을 추가하여 그래프에 함께 그리고자 할때,
-            # 보조지표가 추가되거나 수정되거나 진행 후 렌더링을 하고자 하면 수정 해야함
-            ma_line = go.Scatter(x=df['Date'], y=df['MA20'], mode='lines', name='MA 20', yaxis='y2')
-            upper_band = go.Scatter(x=df['Date'], y=df['Upper'], mode='lines', name='Upper Band', line=dict(width=1),yaxis='y2')
-            lower_band = go.Scatter(x=df['Date'], y=df['Lower'], mode='lines', name='Lower Band', line=dict(width=1),yaxis='y2')
-            net_worth_line = go.Scatter(x=df['Date'], y=df['Net_Worth'], mode='lines', name='Net Worth',line=dict(color='gold'), yaxis='y')
+            # action DataFrame의 각 행에 대해 반복
+            for index, row in self.action.iterrows():
+                x_position = self.slice_df.index.get_loc(index)  # x축 위치 결정
 
+                if row['action'] == 0:
+                    # 위로 향한 빨간 삼각형
+                    fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'Low'] * 0.997], marker_symbol='triangle-up', marker_color='red', marker_size=20))
+                elif row['action'] == 1:
+                    # 아래로 향한 파란 삼각형
+                    fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'High'] * 1.003], marker_symbol='triangle-down', marker_color='blue', marker_size=20))
+                elif row['action'] == 2:
+                    # 초록색 원
+                    fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'High'] * 1.003], marker_symbol='circle', marker_color='green', marker_size=20))
 
-            # Net worth (예제 계산) -수정 되어야함
-            df['Net_Worth'] = df['Close'].cumsum() / 1000  # 예시 계산입니다
-
-            # action 값을 순서대로 따로 저장 해뒀다가 차트그래프와 함께 플랏하는식으로 진행 되어야 할듯. -수정 요망
-            df['action'] = np.random.randint(0, 4, df.shape[0])  # 0부터 3까지의 값
-
-            # 캔들스틱
-            candle = go.Candlestick(x=df['Date'],open=df['Open'],high=df['High'],low=df['Low'],close=df['Close'],increasing_line_color='red', decreasing_line_color='blue',yaxis='y2')
-
-
-            # 'action' 값에 따른 마커 추가
-            # 롱, 숏, 정산 이미지에 대한 내용들
-            shapes = []
-
-            # Action 0에 대한 설정
-            df_filtered_0 = df[df['action'] == 0]
-            marker_0 = go.Scatter(x=df_filtered_0['Date'], y=df_filtered_0['Close'], mode='markers', name='Action 0',marker_symbol='triangle-up', marker_color='red', yaxis='y2')
-            shapes.append(marker_0)
-
-            # Action 1에 대한 설정
-            df_filtered_1 = df[df['action'] == 1]
-            marker_1 = go.Scatter(x=df_filtered_1['Date'], y=df_filtered_1['Close'], mode='markers', name='Action 1',marker_symbol='triangle-down', marker_color='blue', yaxis='y2')
-            shapes.append(marker_1)
-
-            # Action 2에 대한 설정
-            df_filtered_2 = df[df['action'] == 2]
-            marker_2 = go.Scatter(x=df_filtered_2['Date'], y=df_filtered_2['Close'], mode='markers', name='Action 2',marker_symbol='circle', marker_color='green', yaxis='y2')
-            shapes.append(marker_2)
-            # 모든 플롯 결합 (action=3에 대해서는 아무 것도 추가하지 않음)
-            fig = go.Figure(data=[candle, ma_line, upper_band, lower_band, net_worth_line] + shapes)
-
+            # start_step 선과 텍스트 추가
+            fig.add_shape(type="line", x0=self.current_index, y0=0, x1=self.current_index, y1=1, xref='x', yref='paper', line=dict(color="white", width=1))
+            fig.add_annotation(x=self.current_index, y=1, text="Start_Step", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="white", arrowsize=2, arrowwidth=2, ax=20, ay=-30, font=dict(family="Courier New, monospace", size=12, color="#ffffff"), align="center")
 
             # 레이아웃 업데이트
             fig.update_layout(
-                xaxis=dict(domain=[0.7, 0.7]),
+                xaxis=dict(domain=[0, 1]),
                 yaxis=dict(title='Net Worth', side='right', overlaying='y2'),
                 yaxis2=dict(title='Price', side='left'),
-                title='Candlestick Chart with Indicators and Secondary Y-Axis for Net Worth',
+                title='Candlestick',
                 template='plotly_dark'
             )
 
