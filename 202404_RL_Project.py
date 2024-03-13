@@ -30,8 +30,11 @@ class stablebaselineEnv(gym.Env):
         self.chart_data = spaces.Box(low=0, high=np.inf, shape=(df.shape[0], df.shape[1]), dtype=np.float32)
         self.current_index = window_size
         self.current_step = self.slice_df.iloc[window_size]  # 음.. 위치가 애매함-> 이 상태로 설정시 current_step은 self.observation_df의 마지막 행에 해당됨.
+        self.start_step = window_size
         self.current_price = None
-
+        self.df = df
+        self.window_size = window_size
+        self.test_window_size = test_window_size
         """
         할 일
 
@@ -66,7 +69,7 @@ class stablebaselineEnv(gym.Env):
         pass
 
     def reset(self): # 리셋 함수 -> ㅇ
-        self.slice_df = stablebaselineEnv.generate_random_data_slice(self.df, self.window_size,self.test_window_size) # reset 하며 새로운 랜덤 차트 데이터 초기화
+        self.slice_df, self.observation_df, self.train_df = stablebaselineEnv.generate_random_data_slice(self.df, self.window_size,self.test_window_size) # reset 하며 새로운 랜덤 차트 데이터 초기화
         self.observation_space = spaces.Dict({
             "chart_data": spaces.Box(low=0, high=np.inf, shape=(window_size, df.shape[1]), dtype=np.float32),
             "position": spaces.Discrete(3),  # 포지션 {0:Long, 1:Short, 2:None}
@@ -207,7 +210,8 @@ class stablebaselineEnv(gym.Env):
         ) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정됨.
         
         action = self.act(action) # action을 수행함.
-        self.action_history = self.action_history.append({'action': action}, ignore_index=True) # action_history에 action 추가
+        action_row = pd.DataFrame({'action': [action]}, index=[self.slice_df.index[self.current_index]])
+        self.action_history = pd.concat([self.action_history, action_row])
         
         reward = None
         obs = None
@@ -225,29 +229,39 @@ class stablebaselineEnv(gym.Env):
 
     def render(self, render_mode=None):
         if render_mode == "human":
-            candle = go.Candlestick(open=self.slice_df['Open'],high=self.slice_df['High'],low=self.slice_df['Low'],close=self.slice_df['Close'],increasing_line_color='red',decreasing_line_color='blue',yaxis='y2')
+            candle = go.Candlestick(open=self.slice_df['Open'],high=self.slice_df['High'],low=self.slice_df['Low'],close=self.slice_df['Close'],
+                                    increasing_line_color='rgb(38, 166, 154)', increasing_fillcolor='rgb(38, 166, 154)',
+                                    decreasing_line_color='rgb(239, 83, 80)', decreasing_fillcolor='rgb(239, 83, 80)', yaxis='y2')
             fig = go.Figure(data=[candle])
 
             # action DataFrame의 각 행에 대해 반복
             for index, row in self.action_history.iterrows():
-                x_position = self.slice_df.index.get_loc(index)  # x축 위치 결정
+                if index in self.slice_df.index:
+                    x_position = self.slice_df.index.get_loc(index)  # x축 위치 결정
 
-                if row['action'] == 0:
-                    # 위로 향한 빨간 삼각형
-                    fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'Low'] * 0.997], marker_symbol='triangle-up', marker_color='red', marker_size=20))
-                elif row['action'] == 1:
-                    # 아래로 향한 파란 삼각형
-                    fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'High'] * 1.003], marker_symbol='triangle-down', marker_color='blue', marker_size=20))
-                elif row['action'] == 2:
-                    # 초록색 원
-                    fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'High'] * 1.003], marker_symbol='circle', marker_color='green', marker_size=20))
+                    
+                    if row['action'] == 0:
+                        # 위로 향한 빨간 삼각형
+                        fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'Low'] * 0.997], marker_symbol='triangle-up', marker_color='red', marker_size=20))
+                    elif row['action'] == 1:
+                        # 아래로 향한 파란 삼각형
+                        fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'High'] * 1.003], marker_symbol='triangle-down', marker_color='blue', marker_size=20))
+                    elif row['action'] == 2:
+                        # 초록색 원
+                        fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'High'] * 1.003], marker_symbol='circle', marker_color='green', marker_size=20))
 
             # start_step 선과 텍스트 추가
+            fig.add_shape(type="line", x0=self.start_step, y0=0, x1=self.start_step, y1=1, xref='x', yref='paper', line=dict(color="white", width=1))
             fig.add_shape(type="line", x0=self.current_index, y0=0, x1=self.current_index, y1=1, xref='x', yref='paper', line=dict(color="white", width=1))
-            fig.add_annotation(x=self.current_index, y=1, text="Start_Step", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="white", arrowsize=2, arrowwidth=2, ax=20, ay=-30, font=dict(family="Courier New, monospace", size=12, color="#ffffff"), align="center")
-
+            fig.add_annotation(x=self.current_index, y=1, text="Current_Step", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="white",
+                               arrowsize=2, arrowwidth=2, ax=20, ay=-30, font=dict(family="Courier New, monospace", size=12, color="#ffffff"), align="center")
+            fig.add_annotation(x=self.start_step, y=1, text="Start_Step", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="white",
+                               arrowsize=2, arrowwidth=2, ax=-40, ay=-50, font=dict(family="Courier New, monospace", size=12, color="#ffffff"), align="center")
             # 레이아웃 업데이트
             fig.update_layout(
+                height=600,
+                width=1000,
+                plot_bgcolor='rgb(13, 14, 20)',
                 xaxis=dict(domain=[0, 1]),
                 yaxis=dict(title='Net Worth', side='right', overlaying='y2'),
                 yaxis2=dict(title='Price', side='left'),
@@ -282,21 +296,26 @@ class stablebaselineEnv(gym.Env):
     # 노멀라이즈 진행함, 노멀라이즈 진행 시 날짜 정보는 제외됨. 학습에 넣을지 말지는 추후 협의
     def normalization(self, df):
         # Date 열 제거
-        df = df.drop(['Date'], axis=1)
+        try:
+            df = df.drop(['Date'], axis=1)
+        except:
+            pass
+        none_normalized_df = df
 
         # Volume 열에 대해 로그 변환 수행 (거래량의 경우 많은날은 너무 값이 튀어서 문제가 생길 수 있다고 판단되어 로그 스케일로 진행)
-        df['Volume'] = np.log(df['Volume'])
-
+        try:
+            df['Volume'] = np.log(df['Volume'])
+        except:
+            pass
         # 로그 변환된 Volume과 다른 열들에 대해 정규화 수행
         normalized_df = (df - df.min()) / (df.max() - df.min())
 
-        return normalized_df
+        return normalized_df, none_normalized_df
 
 
 
  # df 데이터를 받아 window_size + test_window_size만큼 랜덤 위치로 잘라서 자른 df를 반환해주는 함수
     def generate_random_data_slice(data, window_size, test_window_size):
-
         max_start_index = len(data) - window_size - test_window_size
         if max_start_index <= 0:
             raise ValueError("데이터 크기가 너무 작아 분할할 수 없습니다.")
@@ -305,17 +324,10 @@ class stablebaselineEnv(gym.Env):
         end_index = start_index + window_size
         test_end_index = end_index + test_window_size
 
-        slice_df = data[start_index:test_end_index]
-        observation_df = data[start_index:end_index]
-        train_df = data[end_index:test_end_index]
-
-        return slice_df,observation_df,train_df
-
+        return data[start_index:test_end_index], data[start_index:end_index], data[end_index:test_end_index]
 
     def next_observation(self):
-
         observation_df = self.slice_df.iloc[(self.current_index-101)+1:(self.current_index-1)+1]
-
         return observation_df
 
 
