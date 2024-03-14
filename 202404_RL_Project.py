@@ -9,12 +9,22 @@ from stable_baselines3.common.env_util import make_vec_env
 import mplfinance as mpf
 import ta
 
+"""
+할 일
+
+self.observation이 step이 지나감에 따라 같이 update시키기. -- 완료.
+    - self.observation의 크기를 유지 하기 위해 window_siz는 유지하며 step을 따라가도록 변경 --완료
+    - current_step이 df보다 커지거나 같아질 경우 done = True로 바꾸도록 변경  -- 완료
+
+render 함수 만들기.(가시화)
+        
+"""       
 class stablebaselineEnv(gym.Env):
-    def __init__(self,df, window_size, test_window_size, usdt_balance=1000, btc_size=0, leverage=1): 
+    def __init__(self, df, full_window_size, test_window_size, usdt_balance=1000, btc_size=0, leverage=1): 
         super(stablebaselineEnv, self).__init__()
         self.action_space = spaces.Discrete(4)  # 0: Long, 1: Short, 2: Close, 3: Hold
         self.observation_space = spaces.Dict({
-            "chart_data": spaces.Box(low=0, high=np.inf, shape=(window_size, df.shape[1]), dtype=np.float32),
+            "chart_data": spaces.Box(low=0, high=np.inf, shape=(window_size, df.shape[1]), dtype=np.float32), ###########################
             "position": spaces.Discrete(3),  # 포지션 {0:Long, 1:Short, 2:None}
             "current_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 현재 가격
             "avg_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 평균 진입 가격
@@ -25,27 +35,17 @@ class stablebaselineEnv(gym.Env):
             "size": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 포지션 수량
             "total_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)  # 총 자산
         })
-    
-        self.slice_df, self.observation_df, self.train_df = stablebaselineEnv.generate_random_data_slice(df, window_size,test_window_size) # 랜덤 위치로 slice된 차트 데이터 초기화
+
+        self.slice_df, self.obs_df, self.train_df = stablebaselineEnv.generate_random_data_slice(df, full_window_size, test_window_size) # 랜덤 위치로 slice된 차트 데이터 초기화
         self.chart_data = spaces.Box(low=0, high=np.inf, shape=(df.shape[0], df.shape[1]), dtype=np.float32)
-        self.current_index = window_size
-        self.current_step = self.slice_df.iloc[window_size]  # 음.. 위치가 애매함-> 이 상태로 설정시 current_step은 self.observation_df의 마지막 행에 해당됨.
-        self.start_step = window_size
+        self.current_step = self.slice_df.tail(1)
+        self.start_step = full_window_size
+        self.window_size = full_window_size
         self.current_price = None
         self.df = df
-        self.window_size = window_size
         self.test_window_size = test_window_size
-        """
-        할 일
 
-        self.observation이 step이 지나감에 따라 같이 update시키기. -- 완료.
-            - self.observation의 크기를 유지 하기 위해 window_siz는 유지하며 step을 따라가도록 변경 --완료
-            - current_step이 df보다 커지거나 같아질 경우 done = True로 바꾸도록 변경  -- 완료
 
-        render 함수 만들기.(가시화)
-        
-                
-        """       
         # reset 미포함
         self.initial_usdt_balance = usdt_balance # 초기 usdt 잔고
         self.min_order = 0.002 # 최소 주문 수량
@@ -69,11 +69,10 @@ class stablebaselineEnv(gym.Env):
         pass
 
     def reset(self): # 리셋 함수 -> ㅇ
-        self.slice_df, self.observation_df, self.train_df = stablebaselineEnv.generate_random_data_slice(self.df, self.window_size,self.test_window_size) # reset 하며 새로운 랜덤 차트 데이터 초기화
         self.observation_space = spaces.Dict({
             "chart_data": spaces.Box(low=0, high=np.inf, shape=(window_size, df.shape[1]), dtype=np.float32),
-            "position": spaces.Discrete(3),  # 포지션 {0:Long, 1:Short, 2:None}
             "current_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 현재 가격
+            "position": spaces.Discrete(3),  # 포지션 {0:Long, 1:Short, 2:None}
             "avg_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 평균 진입 가격
             "pnl": spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32),  # 미실현 손익
             "total_pnl": spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32),  # 누적 손익
@@ -82,6 +81,7 @@ class stablebaselineEnv(gym.Env):
             "size": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 포지션 수량
             "total_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)  # 총 자산
         })
+        self.slice_df, self.obs_df, self.train_df = stablebaselineEnv.generate_random_data_slice(self.df, self.window_size,self.test_window_size) # reset 하며 새로운 랜덤 차트 데이터 초기화
         self.usdt_balance = self.initial_usdt_balance # 초기 usdt 잔고
         self.btc_size = 0 # 포지션 수량
         self.margin = 0 # 포지션 증거금
@@ -97,10 +97,6 @@ class stablebaselineEnv(gym.Env):
         self.action_history = pd.DataFrame(columns=['action'])
         pass
     
-
-    # action : 0=Long, 1=Short, 2=Close, 3=Hold
-    # position : 0=Long, 1=Short, 2=None
-    # ex) (0.002*68000)/1=136, (0.002*68000)/2=68 필요 증거금 계산 예시 #
     
     # 나중에 수량지정을 위한 함수 (min_order부분만 바꾸면됌)
     def cac_order_size(self): 
@@ -194,44 +190,105 @@ class stablebaselineEnv(gym.Env):
         return action
     
     '''
-    return : self.position, self.acutal_action, self.pnl, self.closing_pnl, self.total_pnl, self.total_balance
-    
-    주문 수량은 일단 항상 최소 주문 금액으로 하겠습니다.
-    최소 수량으로 해도 0.002개 이고 1배율일 경우 증거금 136usdt 정도 들어갑니다.
-    
-    추후 수량이 커질시 미결손실 또한 고려해야함
+    액션 :
+        action : 0=Long, 1=Short, 2=Close, 3=Hold
+        position : 0=Long, 1=Short, 2=None
+        ex) (0.002*68000)/1=136, (0.002*68000)/2=68 필요 증거금 계산 예시 #
+        
+        return : self.position, self.acutal_action, self.pnl, self.closing_pnl, self.total_pnl, self.total_balance
+        
+        주문 수량은 일단 항상 최소 주문 금액으로 하겠습니다.
+        최소 수량으로 해도 0.002개 이고 1배율일 경우 증거금 136usdt 정도 들어갑니다.
+        
+        추후 수량이 커질시 미결손실 또한 고려해야함
     '''
+    def next_obs(self): # 다음 step의 chart_data 행으로 진행
+        if len(self.chart_data) > self.idx + 1 :
+            self.idx += 1
+            self.observation = self.chart_data.iloc[self.idx]
+            return self.observation
+        return None    
+    
+    # df 데이터를 받아 full_window_size만큼 랜덤 위치로 잘라서 Obs_df와 train_df로 나눈 df를 반환해주는 함수
+    def generate_random_data_slice(df, full_window_size, test_window_size):
+        strat_index = np.random.randint(0, len(df) - full_window_size)
+        end_index = strat_index + full_window_size
+        obs_end = end_index + test_window_size
+        
+        # slice_df : 전체 데이터에서 랜덤한 위치로 잘라낸 데이터
+        # obs_df : 전체 데이터중 현재 스텝의 이전 데이터로써 이미 알고있는 차트 데이터
+        # train_df : 전체 데이터중 현재 스텝의 이후 데이터로써 학습을 위한 차트 데이터
+        return slice_df[strat_index:end_index], obs_df[strat_index:obs_end], train_df[obs_end:end_index]
+
+    # 다음 step과 가격을 가져옴
+    def next_obs(self): 
+        row_to_move = self.train_df.iloc[0:1] # train_df의 첫 행을 가져옴
+        self.obs_df = pd.concat([self.obs_df, row_to_move], ignore_index=True) # obs_df의 마지막 행에 train_df의 첫 행을 추가
+        self.train_df.drop(self.train_df.index[0]) # train_df의 첫 행을 제거 (메모리 절약을 위해)
+        
+        self.current_step = self.obs_df.tail(1) # obs_df의 마지막 행을 현재 스텝으로 설정
+        self.current_price = random.uniform(self.current_step['Open'], self.current_step['Close']) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정
 
 
     def step(self, action):
-        self.current_price = random.uniform(
-            self.slice_df.iloc[self.current_index]['Open'],
-            self.slice_df.iloc[self.current_index]['Close']
-        ) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정됨.
+        self.next_obs() # 다음 obs를 가져옴
+        if (np.array(self.current_step) == None).all(): # 다음 훈련 데이터 없을 시 done = True로 변경 종료
+            done = True
+            return None, None, done, {}
         
         action = self.act(action) # action을 수행함.
-        action_row = pd.DataFrame({'action': [action]}, index=[self.slice_df.index[self.current_index]])
-        self.action_history = pd.concat([self.action_history, action_row])
+        action_row = pd.DataFrame({'action': [action]}, index=[self.slice_df.index[self.current_index]]) 
+        self.action_history = pd.concat([self.action_history, action_row]) # action_history에 action 추가
         
         reward = None
-        obs = None
-
-        self.current_index += 1  # 현재 위치를 다음 스텝으로 옮김
-        self.current_step = self.slice_df.iloc[self.current_index]
-        self.observation_df = self.next_observation()
-
-        if self.current_index >= (test_window_size + window_size) - 1:  # 현재 위치가 window_size + test_window_size만큼 커지게 되면 done=True로 변경
-            done = True
-        else:
-            done = False
+        
+        obs = {
+            "chart_data": self.obs_df,
+            "current_price": np.array([self.current_price]),
+            "position": self.position,
+            "avg_price": np.array([self.avg_price]),
+            "pnl": np.array([self.pnl]),
+            "total_pnl": np.array([self.total_pnl]),
+            "usdt_balance": np.array([self.usdt_balance]),
+            "margin": np.array([self.margin]),
+            "size": np.array([self.size]),
+            "total_balance": np.array([self.total_balance])
+        }
 
         return obs, reward, done, {}
 
+    '''
+    스텝 :
+        1. 다음 step과 price를 가져옴
+        2. 다음 훈련 데이터 없을 시 done = True로 변경 종료
+        3. action을 수행함.
+        4. action_history에 action 추가
+        5. reward : 미구현 ###############################
+        6. obs : 현재 step의 관측치 반환 (수정필요)
+
+    '''
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     def render(self, render_mode=None):
         if render_mode == "human":
-            candle = go.Candlestick(open=self.slice_df['Open'],high=self.slice_df['High'],low=self.slice_df['Low'],close=self.slice_df['Close'],
-                                    increasing_line_color='rgb(38, 166, 154)', increasing_fillcolor='rgb(38, 166, 154)',
-                                    decreasing_line_color='rgb(239, 83, 80)', decreasing_fillcolor='rgb(239, 83, 80)', yaxis='y2')
+            # 캔들차트 그리기
+            candle = go.Candlestick(open=self.slice_df['Open'],high=self.slice_df['High'],low=self.slice_df['Low'],close=self.slice_df['Close'], # OHLCV 지정
+                                    increasing_line_color='rgb(38, 166, 154)', increasing_fillcolor='rgb(38, 166, 154)', # 양봉 색상
+                                    decreasing_line_color='rgb(239, 83, 80)', decreasing_fillcolor='rgb(239, 83, 80)', yaxis='y2') # 음봉 색상
             fig = go.Figure(data=[candle])
 
             # action DataFrame의 각 행에 대해 반복
@@ -250,24 +307,28 @@ class stablebaselineEnv(gym.Env):
                         fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'High'] * 1.003], marker_symbol='circle', marker_color='green', marker_size=20))
 
             # start_step 선과 텍스트 추가
-            fig.add_shape(type="line", x0=self.start_step, y0=0, x1=self.start_step, y1=1, xref='x', yref='paper', line=dict(color="white", width=1))
-            fig.add_shape(type="line", x0=self.current_index, y0=0, x1=self.current_index, y1=1, xref='x', yref='paper', line=dict(color="white", width=1))
-            fig.add_annotation(x=self.current_index, y=1, text="Current_Step", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="white",
-                               arrowsize=2, arrowwidth=2, ax=20, ay=-30, font=dict(family="Courier New, monospace", size=12, color="#ffffff"), align="center")
-            fig.add_annotation(x=self.start_step, y=1, text="Start_Step", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="white",
-                               arrowsize=2, arrowwidth=2, ax=-40, ay=-50, font=dict(family="Courier New, monospace", size=12, color="#ffffff"), align="center")
+            # 시작선
+            fig.add_shape(type="line", x0=self.start_step, y0=0, x1=self.start_step, y1=1, xref='x', yref='paper', line=dict(color="rgb(255, 183, 77)", width=1))
+            # 현재 위치 선
+            fig.add_shape(type="line", x0=self.current_index, y0=0, x1=self.current_index, y1=1, xref='x', yref='paper', line=dict(color="rgb(255, 183, 77)", width=1))
+            # 시작 텍스트
+            fig.add_annotation(x=self.start_step, y=1, text="Start", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="rgb(255, 183, 77)",arrowsize=1.1, arrowwidth=2, ax=-20, ay=-30,
+                               font=dict(family=font, size=12, color="rgb(255, 183, 77)"), align="center")
+            # 현재 위치 텍스트
+            fig.add_annotation(x=self.current_index, y=1, text="Now", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="rgb(255, 183, 77)",arrowsize=1.1, arrowwidth=2, ax=20, ay=-30,
+                               font=dict(family=font, size=12, color="rgb(255, 183, 77)"), align="center")
+            
             # 레이아웃 업데이트
             fig.update_layout(
-                height=600,
-                width=1000,
-                plot_bgcolor='rgb(13, 14, 20)',
+                height=600, # 높이
+                width=1000, # 너비
+                plot_bgcolor='rgb(13, 14, 20)', # 배경색
                 xaxis=dict(domain=[0, 1]),
                 yaxis=dict(title='Net Worth', side='right', overlaying='y2'),
                 yaxis2=dict(title='Price', side='left'),
                 title='Candlestick',
                 template='plotly_dark'
             )
-
             fig.show()
 
 
@@ -293,6 +354,7 @@ class stablebaselineEnv(gym.Env):
 
 
     # 노멀라이즈 진행함, 노멀라이즈 진행 시 날짜 정보는 제외됨. 학습에 넣을지 말지는 추후 협의
+    
     def normalization(self, df):
         # Date 열 제거
         try:
@@ -311,33 +373,10 @@ class stablebaselineEnv(gym.Env):
 
         return normalized_df, none_normalized_df
 
-
-
- # df 데이터를 받아 window_size + test_window_size만큼 랜덤 위치로 잘라서 자른 df를 반환해주는 함수
-    def generate_random_data_slice(data, window_size, test_window_size):
-        max_start_index = len(data) - window_size - test_window_size
-        if max_start_index <= 0:
-            raise ValueError("데이터 크기가 너무 작아 분할할 수 없습니다.")
-
-        start_index = np.random.randint(0, max_start_index)
-        end_index = start_index + window_size
-        test_end_index = end_index + test_window_size
-
-        return data[start_index:test_end_index], data[start_index:end_index], data[end_index:test_end_index]
-
-    def next_observation(self):
-        observation_df = self.slice_df.iloc[(self.current_index-101)+1:(self.current_index-1)+1]
-        return observation_df
-
-
-
-
-window_size = 100  # 에이전트가 볼 수 있는 차트의 크기 (obs 차트 데이터 크기)
+full_window_size = 100  # slice_df의 크기 / 자른 데이터의 전체 크기
 test_window_size = 300  # 에이전트가 볼 수 없고 학습을 진행해야 하는 차트의 크기 
 
 df_path = pd.DataFrame # 각자 .csv파일 경로 지정하는 식으로 (ex:"D:\AI_Learning/bitcoin_chart_Data.csv" )
-
-
 
 
 # # 신경망 모델을 만듬 - MultiInputPolicy(stable baseline에서 신경망 구조 알아서 만들어줌), env: 환경을 받아옴, verbose: log print 양 결정(0:전체,1:심플,2:제외)
@@ -345,3 +384,24 @@ df_path = pd.DataFrame # 각자 .csv파일 경로 지정하는 식으로 (ex:"D:
 
 # model = PPO("MultiInputPolicy", env, verbose=1) 
 # obs = env.reset()
+
+
+
+'''
+백업용 코드
+ # df 데이터를 받아 full_window_size + test_window_size만큼 랜덤 위치로 잘라서 자른 df를 반환해주는 함수
+    def generate_random_data_slice(data, full_window_size, test_window_size):
+        max_start_index = len(data) - full_window_size - test_window_size
+        if max_start_index <= 0:
+            raise ValueError("데이터 크기가 너무 작아 분할할 수 없습니다.")
+
+        start_index = np.random.randint(0, max_start_index)
+        end_index = start_index + full_window_size
+        test_end_index = end_index + test_window_size
+
+        return data[start_index:test_end_index], data[start_index:end_index], data[end_index:test_end_index]
+
+    def next_observation(self):
+        obs_df = self.slice_df.iloc[(self.current_index-101)+1:(self.current_index-1)+1]
+        return obs_df
+'''
