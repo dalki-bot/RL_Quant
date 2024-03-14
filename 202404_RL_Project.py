@@ -238,7 +238,6 @@ class stablebaselineEnv(gym.Env):
             for index, row in self.action_history.iterrows():
                 if index in self.slice_df.index:
                     x_position = self.slice_df.index.get_loc(index)  # x축 위치 결정
-
                     
                     if row['action'] == 0:
                         # 위로 향한 빨간 삼각형
