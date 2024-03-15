@@ -22,29 +22,28 @@ render 함수 만들기.(가시화)
 class stablebaselineEnv(gym.Env):
     def __init__(self, df, full_window_size, test_window_size, usdt_balance=1000, btc_size=0, leverage=1): 
         super(stablebaselineEnv, self).__init__()
+        self.slice_df, self.obs_df, self.train_df = stablebaselineEnv.generate_random_data_slice(df, full_window_size, test_window_size) # 랜덤 위치로 slice된 차트 데이터 초기화
         self.action_space = spaces.Discrete(4)  # 0: Long, 1: Short, 2: Close, 3: Hold
+        self.current_step = self.slice_df.tail(1)
         self.observation_space = spaces.Dict({
-            "chart_data": spaces.Box(low=0, high=np.inf, shape=(window_size, df.shape[1]), dtype=np.float32), ###########################
+            "chart_data": spaces.Box(low=0, high=np.inf, shape=(len(self.current_step.columns,)), dtype=np.float32), # 차트 데이터
             "position": spaces.Discrete(3),  # 포지션 {0:Long, 1:Short, 2:None}
+            "action": spaces.Discrete(4),  # 액션 {0:Long, 1:Short, 2:Close, 3:Hold}
             "current_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 현재 가격
             "avg_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 평균 진입 가격
             "pnl": spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32),  # 미실현 손익
             "total_pnl": spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32),  # 누적 손익
             "usdt_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # USDT 잔고
-            "margin": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 사용 중인 마진
             "size": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 포지션 수량
+            "margin": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 사용 중인 마진
             "total_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)  # 총 자산
         })
 
-        self.slice_df, self.obs_df, self.train_df = stablebaselineEnv.generate_random_data_slice(df, full_window_size, test_window_size) # 랜덤 위치로 slice된 차트 데이터 초기화
-        self.chart_data = spaces.Box(low=0, high=np.inf, shape=(df.shape[0], df.shape[1]), dtype=np.float32)
-        self.current_step = self.slice_df.tail(1)
         self.start_step = full_window_size
         self.window_size = full_window_size
+        self.test_window_size = test_window_size
         self.current_price = None
         self.df = df
-        self.test_window_size = test_window_size
-
 
         # reset 미포함
         self.initial_usdt_balance = usdt_balance # 초기 usdt 잔고
@@ -66,22 +65,12 @@ class stablebaselineEnv(gym.Env):
         self.total_fee = 0 # 누적 수수료
         self.total_balance = 0 # 총 자산
         self.action_history = pd.DataFrame(columns=['action'])
+        self.current_index = 0
         pass
 
-    def reset(self): # 리셋 함수 -> ㅇ
-        self.observation_space = spaces.Dict({
-            "chart_data": spaces.Box(low=0, high=np.inf, shape=(window_size, df.shape[1]), dtype=np.float32),
-            "current_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 현재 가격
-            "position": spaces.Discrete(3),  # 포지션 {0:Long, 1:Short, 2:None}
-            "avg_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 평균 진입 가격
-            "pnl": spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32),  # 미실현 손익
-            "total_pnl": spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32),  # 누적 손익
-            "usdt_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # USDT 잔고
-            "margin": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 사용 중인 마진
-            "size": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 포지션 수량
-            "total_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)  # 총 자산
-        })
+    def reset(self): # 리셋 함수 
         self.slice_df, self.obs_df, self.train_df = stablebaselineEnv.generate_random_data_slice(self.df, self.window_size,self.test_window_size) # reset 하며 새로운 랜덤 차트 데이터 초기화
+        
         self.usdt_balance = self.initial_usdt_balance # 초기 usdt 잔고
         self.btc_size = 0 # 포지션 수량
         self.margin = 0 # 포지션 증거금
@@ -127,6 +116,8 @@ class stablebaselineEnv(gym.Env):
         
         elif action == 3 or self.position is None:
             return 3
+
+        
 
     # 포지션 진입
     def open_position(self, action):
@@ -201,20 +192,14 @@ class stablebaselineEnv(gym.Env):
         최소 수량으로 해도 0.002개 이고 1배율일 경우 증거금 136usdt 정도 들어갑니다.
         
         추후 수량이 커질시 미결손실 또한 고려해야함
-    '''
-    def next_obs(self): # 다음 step의 chart_data 행으로 진행
-        if len(self.chart_data) > self.idx + 1 :
-            self.idx += 1
-            self.observation = self.chart_data.iloc[self.idx]
-            return self.observation
-        return None    
+    ''' 
     
     # df 데이터를 받아 full_window_size만큼 랜덤 위치로 잘라서 Obs_df와 train_df로 나눈 df를 반환해주는 함수
     def generate_random_data_slice(df, full_window_size, test_window_size):
         strat_index = np.random.randint(0, len(df) - full_window_size)
         end_index = strat_index + full_window_size
-        obs_end = end_index + test_window_size
-        
+        obs_end = end_index - test_window_size
+    
         # slice_df : 전체 데이터에서 랜덤한 위치로 잘라낸 데이터
         # obs_df : 전체 데이터중 현재 스텝의 이전 데이터로써 이미 알고있는 차트 데이터
         # train_df : 전체 데이터중 현재 스텝의 이후 데이터로써 학습을 위한 차트 데이터
@@ -224,11 +209,9 @@ class stablebaselineEnv(gym.Env):
     def next_obs(self): 
         row_to_move = self.train_df.iloc[0:1] # train_df의 첫 행을 가져옴
         self.obs_df = pd.concat([self.obs_df, row_to_move], ignore_index=True) # obs_df의 마지막 행에 train_df의 첫 행을 추가
-        self.train_df.drop(self.train_df.index[0]) # train_df의 첫 행을 제거 (메모리 절약을 위해)
-        
+        self.train_df = self.train_df.drop(self.train_df.index[0]) # train_df의 첫 행을 제거 (메모리 절약을 위해)
         self.current_step = self.obs_df.tail(1) # obs_df의 마지막 행을 현재 스텝으로 설정
-        self.current_price = random.uniform(self.current_step['Open'], self.current_step['Close']) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정
-
+        self.current_price = round(random.uniform(self.current_step['Open'].iloc[-1], self.current_step['Close'].iloc[-1]), 2) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정
 
     def step(self, action):
         self.next_obs() # 다음 obs를 가져옴
@@ -241,21 +224,22 @@ class stablebaselineEnv(gym.Env):
         self.action_history = pd.concat([self.action_history, action_row]) # action_history에 action 추가
         
         reward = None
-        
+        done = False
         obs = {
-            "chart_data": self.obs_df,
-            "current_price": np.array([self.current_price]),
+            "chart_data": self.current_step,
             "position": self.position,
-            "avg_price": np.array([self.avg_price]),
-            "pnl": np.array([self.pnl]),
-            "total_pnl": np.array([self.total_pnl]),
-            "usdt_balance": np.array([self.usdt_balance]),
-            "margin": np.array([self.margin]),
-            "size": np.array([self.size]),
-            "total_balance": np.array([self.total_balance])
+            "action": action,
+            "current_price": self.current_price,
+            "avg_price": self.current_avg_price,
+            "pnl": self.pnl,
+            "total_pnl": self.total_pnl,
+            "usdt_balance": round(self.usdt_balance, 2),
+            "size": self.btc_size,
+            "margin": self.margin,
+            "total_balance": self.total_balance
         }
-
-        return obs, reward, done, {}
+        info = {}
+        return obs, reward, done, info
 
     '''
     스텝 :
@@ -265,6 +249,8 @@ class stablebaselineEnv(gym.Env):
         4. action_history에 action 추가
         5. reward : 미구현 ###############################
         6. obs : 현재 step의 관측치 반환 (수정필요)
+        
+    done 조건 생각해보기
 
     '''
 
