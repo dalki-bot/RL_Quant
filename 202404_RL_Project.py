@@ -23,13 +23,20 @@ render 함수 만들기.(가시화)
         
 """       
 class stablebaselineEnv(gym.Env):
-    def __init__(self, df, full_window_size, test_window_size, usdt_balance=1000, btc_size=0, leverage=1): 
+    def __init__(self, df, full_window_size, test_window_size, usdt_balance, btc_size=0, leverage=1): 
         super(stablebaselineEnv, self).__init__()
-        self.slice_df, self.obs_df, self.train_df = stablebaselineEnv.generate_random_data_slice(df, full_window_size, test_window_size) # 랜덤 위치로 slice된 차트 데이터 초기화
+        self.df = df
+        # self.df['Volume'] = np.log(self.df['Volume'])
+
+        self.slice_df, self.obs_df, self.train_df = self.generate_random_data_slice(df, full_window_size, test_window_size)  # 랜덤 위치로 slice된 차트 데이터 초기화
+
+        # self.mean = np.mean(self.obs_df, axis=0)
+        # self.std = np.std(self.obs_df, axis=0)
+        # self.standard_slice_df, self.standard_obs_df, self.standard_train_df = stablebaselineEnv.standardzation(self.slice_df, self.obs_df, self.train_df, self.mean, self.std,mode=1)  # 정규화를 진행함. 모드 0,1 있음.
+
         self.action_space = spaces.Discrete(4)  # 0: Long, 1: Short, 2: Close, 3: Hold
-        self.current_step = self.slice_df.tail(1)
         self.observation_space = spaces.Dict({
-            "chart_data": spaces.Box(low=0, high=np.inf, shape=(len(self.current_step.columns,)), dtype=np.float32), # 차트 데이터
+            "chart_data": spaces.Box(low=0, high=np.inf, shape=self.obs_df.shape, dtype=np.float32), # 차트 데이터
             "position": spaces.Discrete(3),  # 포지션 {0:Long, 1:Short, 2:None}
             "action": spaces.Discrete(4),  # 액션 {0:Long, 1:Short, 2:Close, 3:Hold}
             "current_price": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 현재 가격
@@ -41,12 +48,12 @@ class stablebaselineEnv(gym.Env):
             "margin": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),  # 사용 중인 마진
             "total_balance": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)  # 총 자산
         })
-
-        self.start_step = full_window_size
-        self.window_size = full_window_size
+        self.full_window_size = full_window_size
         self.test_window_size = test_window_size
-        self.current_price = None
-        self.df = df
+        
+        # self.start_step = len(self.full_window_size - self.test_window_size)
+        self.current_step = self.obs_df.tail(1)
+        self.current_price = round(random.uniform(self.train_df['Open'].iloc[0], self.train_df['Close'].iloc[0]), 2) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정
 
         # reset 미포함
         self.initial_usdt_balance = usdt_balance # 초기 usdt 잔고
@@ -58,7 +65,7 @@ class stablebaselineEnv(gym.Env):
         self.usdt_balance = usdt_balance # 초기 usdt 잔고
         self.btc_size = btc_size # 포지션 수량
         self.margin = 0 # 포지션 증거금
-        self.position = None # 포지션 {0:Long, 1:Short, 2:None}
+        self.position = 2 # 포지션 {0:Long, 1:Short, 2:None}
         self.order_price = 0 # 주문 금액
         self.last_size_value = 0 # (평단가 계산에 필요)
         self.current_avg_price = 0 # 현재 평단가
@@ -67,17 +74,24 @@ class stablebaselineEnv(gym.Env):
         self.total_pnl = 0 # 누적 손익
         self.total_fee = 0 # 누적 수수료
         self.total_balance = 0 # 총 자산
-        self.action_history = pd.DataFrame(columns=['action'])
+        # self.action_history = pd.DataFrame(columns=['action'])
         self.current_index = 0
-        pass
+
 
     def reset(self): # 리셋 함수 
-        self.slice_df, self.obs_df, self.train_df = stablebaselineEnv.generate_random_data_slice(self.df, self.window_size,self.test_window_size) # reset 하며 새로운 랜덤 차트 데이터 초기화
-        
+        self.slice_df, self.obs_df, self.train_df = self.generate_random_data_slice(self.df, self.full_window_size, self.test_window_size) # 랜덤 위치로 slice된 차트 데이터 초기화
+        # self.mean = np.mean(self.obs_df, axis=0)
+        # self.std = np.std(self.obs_df, axis=0)
+        # self.standard_slice_df, self.standard_obs_df, self.standard_train_df = stablebaselineEnv.standardzation(self.slice_df, self.obs_df, self.train_df, self.mean, self.std,mode=1)  # 정규화를 진행함. 모드 0,1 있음.
+
+        # self.start_step = len(self.full_window_size - self.test_window_size)
+        self.current_step = self.obs_df.tail(1)
+        self.current_price = round(random.uniform(self.train_df.iloc[0]['Open'], self.train_df.iloc[0]['Close']), 2) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정
+
         self.usdt_balance = self.initial_usdt_balance # 초기 usdt 잔고
         self.btc_size = 0 # 포지션 수량
         self.margin = 0 # 포지션 증거금
-        self.position = None # 포지션 {0:Long, 1:Short, 2:None}
+        self.position = 2 # 포지션 {0:Long, 1:Short, 2:None}
         self.order_price = 0 # 주문 금액
         self.last_size_value = 0 # (평단가 계산에 필요)
         self.current_avg_price = 0 # 현재 평단가
@@ -86,9 +100,14 @@ class stablebaselineEnv(gym.Env):
         self.total_pnl = 0 # 누적 손익
         self.total_fee = 0 # 누적 수수료
         self.total_balance = 0 # 총 자산
-        self.action_history = pd.DataFrame(columns=['action'])
-        pass
-    
+        # self.action_history = pd.DataFrame(columns=['action'])
+        self.current_index = 0
+
+        return self.get_obs() 
+        
+    def seed(self, seed=None):
+        np.random.seed(seed)
+        return [seed]
     
     # 나중에 수량지정을 위한 함수 (min_order부분만 바꾸면됌)
     def cac_order_size(self): 
@@ -120,8 +139,7 @@ class stablebaselineEnv(gym.Env):
         elif action == 3 or self.position is None:
             return 3
 
-        
-
+    
     # 포지션 진입
     def open_position(self, action):
         order_size = self.cac_order_size()
@@ -173,6 +191,7 @@ class stablebaselineEnv(gym.Env):
         elif action == 2:  # Close
             if self.position == 0 or self.position == 1:
                 self.close_position()
+                
         
         elif action == 3:  # Hold
             if self.position == 0:  # Long
@@ -198,51 +217,73 @@ class stablebaselineEnv(gym.Env):
     ''' 
     
     # df 데이터를 받아 full_window_size만큼 랜덤 위치로 잘라서 Obs_df와 train_df로 나눈 df를 반환해주는 함수
-    def generate_random_data_slice(df, full_window_size, test_window_size):
+    def generate_random_data_slice(self, df, full_window_size, test_window_size):
         strat_index = np.random.randint(0, len(df) - full_window_size)
         end_index = strat_index + full_window_size
         obs_end = end_index - test_window_size
-    
+        
+        slice_df = df[strat_index:end_index]
+        obs_df = df[strat_index:obs_end]
+        train_df = df[obs_end:end_index]
         # slice_df : 전체 데이터에서 랜덤한 위치로 잘라낸 데이터
         # obs_df : 전체 데이터중 현재 스텝의 이전 데이터로써 이미 알고있는 차트 데이터
         # train_df : 전체 데이터중 현재 스텝의 이후 데이터로써 학습을 위한 차트 데이터
-        return slice_df[strat_index:end_index], obs_df[strat_index:obs_end], train_df[obs_end:end_index]
-
+        
+        return slice_df, obs_df, train_df
+    
     # 다음 step과 가격을 가져옴
     def next_obs(self): 
-        row_to_move = self.train_df.iloc[0:1] # train_df의 첫 행을 가져옴
-        self.obs_df = pd.concat([self.obs_df, row_to_move], ignore_index=True) # obs_df의 마지막 행에 train_df의 첫 행을 추가
-        self.train_df = self.train_df.drop(self.train_df.index[0]) # train_df의 첫 행을 제거 (메모리 절약을 위해)
+        # row_to_move = self.train_df.iloc[0:1] # train_df의 첫 행을 가져옴
+        # self.obs_df = pd.concat([self.obs_df, row_to_move]) # obs_df의 마지막 행에 train_df의 첫 행을 추가
+        # self.obs_df = self.obs_df.drop(self.obs_df.index[0]) # obs_df의 첫 행을 제거 (메모리 절약을 위해)
+        # self.train_df = self.train_df.drop(self.train_df.index[0]) # train_df의 첫 행을 제거 (메모리 절약을 위해)
         self.current_step = self.obs_df.tail(1) # obs_df의 마지막 행을 현재 스텝으로 설정
-        self.current_price = round(random.uniform(self.current_step['Open'].iloc[-1], self.current_step['Close'].iloc[-1]), 2) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정
-
-    def step(self, action):
-        self.next_obs() # 다음 obs를 가져옴
-        if (np.array(self.current_step) == None).all(): # 다음 훈련 데이터 없을 시 done = True로 변경 종료
-            done = True
-            return None, None, done, {}
+    
+    def get_price(self):
+        open = self.train_df.iloc[0]['Open']
+        close = self.train_df.iloc[0]['Close']
+        self.current_price = round(random.uniform(open, close), 2) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정
         
-        action = self.act(action) # action을 수행함.
-        action_row = pd.DataFrame({'action': [action]}, index=[self.slice_df.index[self.current_index]]) 
-        self.action_history = pd.concat([self.action_history, action_row]) # action_history에 action 추가
-        
-        reward = None
-        done = False
+    def calculate_reward(self):
+        reward = 0
+        if self.closing_pnl > 0:
+            reward += 2
+            
+        elif self.closing_pnl < 0:
+            reward -= 1
+            
+        self.closing_pnl = 0
+        return reward
+    
+    def get_obs(self, action=3):
         obs = {
-            "chart_data": self.current_step,
+            "chart_data": self.obs_df.values,
             "position": self.position,
             "action": action,
-            "current_price": self.current_price,
-            "avg_price": self.current_avg_price,
-            "pnl": self.pnl,
-            "total_pnl": self.total_pnl,
-            "usdt_balance": round(self.usdt_balance, 2),
-            "size": self.btc_size,
-            "margin": self.margin,
-            "total_balance": self.total_balance
+            "current_price": np.array([self.current_price]),
+            "avg_price": np.array([self.current_avg_price]),
+            "pnl": np.array([self.pnl]),
+            "total_pnl": np.array([self.total_pnl]),
+            "usdt_balance": np.array([self.usdt_balance]),
+            "size": np.array([self.btc_size]),
+            "margin": np.array([self.margin]),
+            "total_balance": np.array([self.total_balance])
         }
-        info = {}
-        return obs, reward, done, info
+        return obs
+    
+    def step(self, action):
+        self.get_price() # 현재 가격을 가져옴
+        self.next_obs() # 다음 obs를 가져옴  
+        action = self.act(action) # action을 수행함.
+        reward = self.calculate_reward() # reward 계산
+        # action_row = pd.DataFrame({'action': [action]}, index=[self.slice_df.index[self.current_index]]) 
+        # self.action_history = pd.concat([self.action_history, action_row]) # action_history에 action 추가
+        if self.total_balance < self.total_balance * 0.3:
+            done = True
+        else:
+            done = False
+        
+        return self.get_obs(action), reward, done, {}
 
     '''
     스텝 :
@@ -329,43 +370,47 @@ class stablebaselineEnv(gym.Env):
     # 여러가지 보조지표들을 추가하는 함수, 보조지표들을 넣고 싶다면 여기서 수정 진행
     def add_indicator(self,df):
         # RSI & ADX 보조지표 추가
-        df['RSI'] = ta.momentum.rsi(df['Close'])
-        df['ADX'] = ta.trend.adx(df['High'], df['Low'], df['Close'])
+        df['RSI'] = ta.momentum.rsi(df['Open'])
 
         # # 단순 이동평균선 추가
-        df['SMA_10'] = ta.trend.sma_indicator(df['Close'], window=10)
-        df['SMA_20'] = ta.trend.sma_indicator(df['Close'], window=20)
+        df['SMA_10'] = ta.trend.sma_indicator(df['Open'], window=10)
+        df['SMA_20'] = ta.trend.sma_indicator(df['Open'], window=20)
 
         # 지수 이동평균선 추가
-        # df['EMA_10'] = ta.trend.ema_indicator(df['Close'], window=10)
-        # df['EMA_20'] = ta.trend.ema_indicator(df['Close'], window=20)
+        # df['EMA_10'] = ta.trend.ema_indicator(df['Open'], window=10)
+        # df['EMA_20'] = ta.trend.ema_indicator(df['Open'], window=20)
 
         # 볼린저 밴드 추가
-        bollinger = ta.volatility.BollingerBands(close=df['Close'], window=20, window_dev=2)
+        bollinger = ta.volatility.BollingerBands(close=df['Open'], window=20, window_dev=2)
         df['Bollinger_High'] = bollinger.bollinger_hband()
         # df['Bollinger_Mid'] = bollinger.bollinger_mavg() #window가 20일 때 20일선과 같은것으로 알고 있음
         df['Bollinger_Low'] = bollinger.bollinger_lband()
 
 
     # 노멀라이즈 진행함, 노멀라이즈 진행 시 날짜 정보는 제외됨. 학습에 넣을지 말지는 추후 협의
-    
-    def normalization(self, df):
-        # Date 열 제거
-        try:
-            df = df.drop(['Date'], axis=1)
-        except:
-            pass
-        none_normalized_df = df
+    def standardzation(slice_df, obs_df, train_df , mean, std, mode=0):
+        if mode == 0: # 기존 데이터의 평균 및 표준편차 값으로 새로운 데이터 모두
+            standard_slice_df = (slice_df - mean) / std
+            standard_obs_df = (obs_df - mean) / std
+            standard_train_df = (train_df - mean) / std
 
-        # Volume 열에 대해 로그 변환 수행 (거래량의 경우 많은날은 너무 값이 튀어서 문제가 생길 수 있다고 판단되어 로그 스케일로 진행)
-        try:
-            df['Volume'] = np.log(df['Volume'])
-        except:
-            pass
-        # 로그 변환된 Volume과 다른 열들에 대해 정규화 수행
-        normalized_df = (df - df.min()) / (df.max() - df.min())
 
-        return normalized_df, none_normalized_df
+
+        elif mode == 1: #인터넷에 있는 방법, 바로 전 종가 값으로 현재 모든 값을 나눔. (볼륨 제외)
+            scale = 1000
+            standard_slice_df = pd.DataFrame()
+            standard_obs_df = pd.DataFrame()
+            standard_train_df = pd.DataFrame()
+            # 스케일링 대상 컬럼 리스트
+            for column in ['Open', 'High', 'Low', 'Close']:
+                standard_slice_df[column] =( slice_df[column] / slice_df['Close'].shift(1)-1) * scale
+                standard_obs_df[column] = (obs_df[column] / obs_df['Close'].shift(1)-1) * scale
+                standard_train_df[column] = (train_df[column] / train_df['Close'].shift(1)-1) * scale
+
+        return standard_slice_df,standard_obs_df,standard_train_df
+
+
+   
 
 full_window_size = 100  # slice_df의 크기 / 자른 데이터의 전체 크기
 test_window_size = 300  # 에이전트가 볼 수 없고 학습을 진행해야 하는 차트의 크기 
