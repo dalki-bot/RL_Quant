@@ -4,10 +4,13 @@ import gym
 import stable_baselines3
 from gym import spaces
 import numpy as np
-from stable_baselines3 import PPO,DQN,A2C
+from stable_baselines3 import PPO, DQN, A2C
 from stable_baselines3.common.env_util import make_vec_env
 import mplfinance as mpf
+import shimmy
 import ta
+import plotly.graph_objects as go
+from collections import deque
 
 """
 할 일
@@ -270,51 +273,56 @@ class stablebaselineEnv(gym.Env):
 
 
     def render(self, render_mode=None):
+        font = 'Verdana'
+
         if render_mode == "human":
-            # 캔들차트 그리기
-            candle = go.Candlestick(open=self.slice_df['Open'],high=self.slice_df['High'],low=self.slice_df['Low'],close=self.slice_df['Close'], # OHLCV 지정
-                                    increasing_line_color='rgb(38, 166, 154)', increasing_fillcolor='rgb(38, 166, 154)', # 양봉 색상
-                                    decreasing_line_color='rgb(239, 83, 80)', decreasing_fillcolor='rgb(239, 83, 80)', yaxis='y2') # 음봉 색상
+            candle = go.Candlestick(open=self.slice_df['Open'], high=self.slice_df['High'], low=self.slice_df['Low'], close=self.slice_df['Close'],
+                                    increasing_line_color='rgb(38, 166, 154)', increasing_fillcolor='rgb(38, 166, 154)',
+                                    decreasing_line_color='rgb(239, 83, 80)', decreasing_fillcolor='rgb(239, 83, 80)', yaxis='y2')
             fig = go.Figure(data=[candle])
 
             # action DataFrame의 각 행에 대해 반복
             for index, row in self.action_history.iterrows():
                 if index in self.slice_df.index:
                     x_position = self.slice_df.index.get_loc(index)  # x축 위치 결정
-                    
+
                     if row['action'] == 0:
                         # 위로 향한 빨간 삼각형
-                        fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'Low'] * 0.997], marker_symbol='triangle-up', marker_color='red', marker_size=20))
+                        fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(38, 166, 154, 0.3)", width=5))
                     elif row['action'] == 1:
                         # 아래로 향한 파란 삼각형
-                        fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'High'] * 1.003], marker_symbol='triangle-down', marker_color='blue', marker_size=20))
+                        fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(239, 83, 80, 0.3)", width=5))
                     elif row['action'] == 2:
                         # 초록색 원
-                        fig.add_trace(go.Scatter(x=[x_position], y=[self.slice_df.loc[index, 'High'] * 1.003], marker_symbol='circle', marker_color='green', marker_size=20))
+                        fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(0, 255, 0,0.3)", width=5))
+
+            # font = 'Open Sans'
+            # font = 'Droid Sans'
+            # font = 'PT Sans Narrow'
 
             # start_step 선과 텍스트 추가
-            # 시작선
-            fig.add_shape(type="line", x0=self.start_step, y0=0, x1=self.start_step, y1=1, xref='x', yref='paper', line=dict(color="rgb(255, 183, 77)", width=1))
-            # 현재 위치 선
             fig.add_shape(type="line", x0=self.current_index, y0=0, x1=self.current_index, y1=1, xref='x', yref='paper', line=dict(color="rgb(255, 183, 77)", width=1))
-            # 시작 텍스트
-            fig.add_annotation(x=self.start_step, y=1, text="Start", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="rgb(255, 183, 77)",arrowsize=1.1, arrowwidth=2, ax=-20, ay=-30,
+
+            fig.add_shape(type="line", x0=self.start_step, y0=0, x1=self.start_step, y1=1, xref='x', yref='paper', line=dict(color="rgb(255, 183, 77)", width=1))
+
+            fig.add_annotation(x=self.start_step, y=1, text="Start", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="rgb(255, 183, 77)", arrowsize=1.1, arrowwidth=2, ax=-20, ay=-30,
                                font=dict(family=font, size=12, color="rgb(255, 183, 77)"), align="center")
-            # 현재 위치 텍스트
-            fig.add_annotation(x=self.current_index, y=1, text="Now", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="rgb(255, 183, 77)",arrowsize=1.1, arrowwidth=2, ax=20, ay=-30,
+
+            fig.add_annotation(x=self.current_index, y=1, text="Now", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="rgb(255, 183, 77)", arrowsize=1.1, arrowwidth=2, ax=20, ay=-30,
                                font=dict(family=font, size=12, color="rgb(255, 183, 77)"), align="center")
-            
+
             # 레이아웃 업데이트
             fig.update_layout(
-                height=600, # 높이
-                width=1000, # 너비
-                plot_bgcolor='rgb(13, 14, 20)', # 배경색
+                height=600,
+                width=1000,
+                plot_bgcolor='rgb(13, 14, 20)',
                 xaxis=dict(domain=[0, 1]),
                 yaxis=dict(title='Net Worth', side='right', overlaying='y2'),
                 yaxis2=dict(title='Price', side='left'),
-                title='Candlestick',
+                title='RL 차트',
                 template='plotly_dark'
             )
+
             fig.show()
 
 
