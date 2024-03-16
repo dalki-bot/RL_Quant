@@ -316,4 +316,4 @@ if __name__ == "__main__":
 
     model = PPO("MultiInputPolicy", env, verbose=1)
     obs = env.reset()
-    model.learn(total_timesteps=10000)
+    model.learn(total_timesteps=1000000)
