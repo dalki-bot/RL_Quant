@@ -74,6 +74,7 @@ class stablebaselineEnv(gym.Env):
         self.total_pnl = 0 # 누적 손익
         self.total_fee = 0 # 누적 수수료
         self.total_balance = 0 # 총 자산
+        self.previous_total_balance = 0  # 이전 총 자산
         # self.action_history = pd.DataFrame(columns=['action'])
         self.current_index = 0
 
@@ -100,6 +101,7 @@ class stablebaselineEnv(gym.Env):
         self.total_pnl = 0 # 누적 손익
         self.total_fee = 0 # 누적 수수료
         self.total_balance = 0 # 총 자산
+        self.previous_total_balance = 0  # 이전 총 자산
         # self.action_history = pd.DataFrame(columns=['action'])
         self.current_index = 0
 
@@ -145,62 +147,66 @@ class stablebaselineEnv(gym.Env):
         order_size = self.cac_order_size()
         required_margin = (order_size * self.current_price) / self.leverage
         open_fee = order_size * self.current_price * self.fee
-        
+
         self.usdt_balance -= required_margin + open_fee
         self.btc_size += order_size
         self.margin += required_margin
-        
+
         self.order_price = order_size * self.current_price
         self.current_avg_price = (self.order_price + self.last_size_value) / self.btc_size
         self.last_size_value = self.btc_size * self.current_price
-                        
+
         self.pnl = (1 if action == 0 else -1) * (
-            self.current_price - self.current_avg_price) * self.btc_size * self.leverage
-            
+                self.current_price - self.current_avg_price) * self.btc_size * self.leverage
+
         self.total_fee -= open_fee
         self.total_balance = self.usdt_balance + self.margin
+        self.previous_total_balance = self.total_balance
         self.position = action
-        
+
     def close_position(self):
         closing_fee = self.btc_size * self.current_price * self.fee
         closing_pnl = (1 if self.position == 0 else -1) * (
-            self.current_price - self.current_avg_price) * self.btc_size * self.leverage
-        
+                self.current_price - self.current_avg_price) * self.btc_size * self.leverage
+
         self.usdt_balance += self.margin + closing_pnl - closing_fee
         self.total_fee -= closing_fee
         self.total_pnl += closing_pnl
         self.closing_pnl = closing_pnl
-        
+
         self.btc_size = 0
         self.margin = 0
         self.pnl = 0
         self.last_size_value = 0
-        
+
         self.total_balance = self.usdt_balance + self.margin
-        self.position = 2
+
 
     def act(self, action):
         action = self.act_check(action)
+        reward = 0
         if action == 0 or action == 1:  # Long or Short
             if self.position == action or self.position == 2 or self.position is None:
                 self.open_position(action)
             else:
                 self.close_position()
+                reward = self.calculate_reward(action)
                 self.open_position(action)
-        
+
         elif action == 2:  # Close
             if self.position == 0 or self.position == 1:
                 self.close_position()
-                
-        
+                reward = self.calculate_reward(action)
+
         elif action == 3:  # Hold
             if self.position == 0:  # Long
                 self.pnl = (self.current_price - self.current_avg_price) * self.btc_size * self.leverage
             elif self.position == 1:  # Short
                 self.pnl = (self.current_avg_price - self.current_price) * self.btc_size * self.leverage
-            
             self.total_balance = self.usdt_balance + self.margin
-        return action
+            reward = 0
+            
+        return action , reward
     
     '''
     액션 :
@@ -244,16 +250,17 @@ class stablebaselineEnv(gym.Env):
         close = self.train_df.iloc[0]['Close']
         self.current_price = round(random.uniform(open, close), 2) # 현재 가격을 시가, 종가 사이 랜덤 값으로 결정
         
-    def calculate_reward(self):
-        reward = 0
-        if self.closing_pnl > 0:
-            reward += 2
-            
-        elif self.closing_pnl < 0:
-            reward -= 1
-            
-        self.closing_pnl = 0
-        return reward
+    def calculate_reward(self, action):
+        if self.total_balance <= self.previous_total_balance: # 이전 총 자산보다 현재 총 자산이 작거나 같을 경우
+            return -1
+
+        if action == 2: # Close
+            return 1.5
+
+        if (action == 0 and self.position == 1) or (action == 1 and self.position == 0):
+            return 1.5
+        self.position = 2
+        return 0
     
     def get_obs(self, action=3):
         obs = {
@@ -272,10 +279,9 @@ class stablebaselineEnv(gym.Env):
         return obs
     
     def step(self, action):
-        self.get_price() # 현재 가격을 가져옴
-        self.next_obs() # 다음 obs를 가져옴  
-        action = self.act(action) # action을 수행함.
-        reward = self.calculate_reward() # reward 계산
+        self.get_price()  # 현재 가격을 가져옴
+        self.next_obs()  # 다음 obs를 가져옴
+        action, reward = self.act(action)  # action을 수행함.
         # action_row = pd.DataFrame({'action': [action]}, index=[self.slice_df.index[self.current_index]]) 
         # self.action_history = pd.concat([self.action_history, action_row]) # action_history에 action 추가
         if self.total_balance < self.total_balance * 0.3:
