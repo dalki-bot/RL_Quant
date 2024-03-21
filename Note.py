@@ -41,7 +41,63 @@
 
 
 
+--------------------------------------------------------------------------------------
+데이터 스케일링
 
+1. discrete한 데이터는 그대로 사용.
+2. 음수값이 있는 데이터는 signed_log를 사용.
+3. 나머지는 log1p를 사용.
+
+
+def signed_log(x):
+    return np.sign(x) * np.log1p(np.abs(x))
+
+obs_example_transformed = {
+    "chart_data": np.log1p(np.array([[100.0, 200.0, 150.0, 120.0, 180.0],
+                                     [1000.0, 1200.0, 1100.0, 1000.0, 1300.0],
+                                     [0.1, 0.2, 0.15, 0.12, 0.18]])),
+    "position": 0,  # Long
+    "action": 3,  # Hold
+    "current_price": np.log1p(np.array([1250.0])),
+    "avg_price": np.log1p(np.array([1200.0])),
+    "pnl": signed_log(np.array([-50.0])),  # pnl을 음수로 변경
+    "total_pnl": signed_log(np.array([150.0])),
+    "usdt_balance": np.log1p(np.array([1000.0])),
+    "size": np.log1p(np.array([0.1])),
+    "margin": np.log1p(np.array([120.0])),
+    "total_balance": np.log1p(np.array([1150.0]))
+}
+
+변환 결과:
+    chart_data:
+        [[4.61512052 5.30390725 5.01063529 4.79579055 5.19295685]
+        [6.90875478 7.09007684 7.00306546 6.90875478 7.17011843]
+        [-2.30258509 -1.60943791 -1.89711998 -2.12026354 -1.7147984 ]]
+    
+        position: 0 (변환 없음)
+        action: 3 (변환 없음)
+        current_price: [7.13089883]
+        avg_price: [7.09007684]
+        pnl: [-3.93182563] # pnl이 음수로 변경되어 signed_log 변환됨
+        total_pnl: [5.01063529]
+        usdt_balance: [6.90875478]
+        size: [-2.30258509]
+        margin: [4.79579055]
+        total_balance: [7.04752389]
+
+        chart_data: -2.30258509 ~ 7.17011843
+        current_price: 7.13089883
+        avg_price: 7.09007684
+        pnl: -3.93182563
+        total_pnl: 5.01063529
+        usdt_balance: 6.90875478
+        size: -2.30258509
+        margin: 4.79579055
+        total_balance: 7.04752389
+        
+        대부분의 값들이 -2.3에서 7.2 사이의 범위로 조정
+        각 스텝마다 변환하기 수월하것으로 예상됨.
+        이건 논문으로 발표해야 하는것아닌가 생각이듬. ㅋㅋㅋㅋ
 
 
 
