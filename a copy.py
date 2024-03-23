@@ -100,10 +100,15 @@ class stablebaselineEnv(gym.Env):
             return done
             
     def get_price(self):
-        open = self.full_window.iloc[self.obs_window.index[-1]+1]['Open']
-        close = self.full_window.iloc[self.obs_window.index[-1]+1]['Close']
-        self.current_price = round(random.uniform(open, close), 2)
-        return self.current_price
+        if self.full_window.index[-1] > self.obs.window.index[-1]:
+            open = self.full_window.iloc[self.obs_window.index[-1]+1]['Open']
+            close = self.full_window.iloc[self.obs_window.index[-1]+1]['Close']
+            self.current_price = round(random.uniform(open, close), 2)
+            return self.current_price
+        
+        elif self.full_window.index[-1] <= self.obs.window.index[-1]:
+            return self.current_price
+        
     
     
     # 나중에 수량지정을 위한 함수 (min_order부분만 바꾸면됌)
@@ -240,6 +245,7 @@ class stablebaselineEnv(gym.Env):
         done = self.next_obs()
         info = {}
         return self.get_obs(), reward, done, info
+    # self.get_price done 출력 고치기
     
 df = pd.read_csv(r'C:\Users\user\Documents\GitHub\RL_Quant\btctest.csv')
 env = stablebaselineEnv(df, full_window_size=100, obs_window_size=50, usdt_balance=1000)
