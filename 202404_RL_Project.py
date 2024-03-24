@@ -418,7 +418,7 @@ class stablebaselineEnv(gym.Env):
 
    
 
-full_window_size = 100  # slice_df의 크기 / 자른 데이터의 전체 크기
+full_window_size = 400  # slice_df의 크기 / 자른 데이터의 전체 크기
 test_window_size = 300  # 에이전트가 볼 수 없고 학습을 진행해야 하는 차트의 크기 
 
 df_path = pd.DataFrame # 각자 .csv파일 경로 지정하는 식으로 (ex:"D:\AI_Learning/bitcoin_chart_Data.csv" )
