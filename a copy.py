@@ -11,6 +11,7 @@ from gym import spaces
 import stable_baselines3
 from stable_baselines3 import PPO, DQN, A2C
 from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.callbacks import BaseCallback
 
 class stablebaselineEnv(gym.Env):
     def __init__(self, df, full_window_size, obs_window_size, usdt_balance, btc_size=0, leverage=1): 
@@ -59,7 +60,11 @@ class stablebaselineEnv(gym.Env):
         self.total_balance = 0 # 총 자산
         self.previous_total_balance = 0  # 이전 총 자산
         
+        # 랜더링 관련 변수
+        self.action_history = pd.DataFrame(columns=['step', 'action'])
+        
     def reset(self):
+        self.start_idx = 0
         self.full_window, self.obs_window = self.generate_random_data_slice()
         self.current_step = self.obs_window.tail(1)
         self.current_price = self.get_price()
@@ -88,16 +93,9 @@ class stablebaselineEnv(gym.Env):
         return full_window, obs_window
     
     def next_obs(self):
-        done = False
-        if self.obs_window.index[-1] == self.full_window.index[-1]:
-            done = True
-            return done
-        else:
-            self.start_idx += 1
-            self.obs_window = self.full_window[self.start_idx:self.start_idx + self.obs_window_size]
-            self.current_step = self.obs_window.tail(1)
-            done = False
-            return done
+        self.start_idx += 1
+        self.obs_window = self.full_window[self.start_idx:self.start_idx + self.obs_window_size]
+        self.current_step = self.obs_window.tail(1)
             
     def get_price(self):
         open = self.full_window.iloc[self.obs_window.index[-1]+1]['Open']
@@ -180,10 +178,10 @@ class stablebaselineEnv(gym.Env):
             return -1
 
         if action == 2: # Close
-            return 1.5
+            return +1.5
 
         if (action == 0 and self.position == 1) or (action == 1 and self.position == 0):
-            return 1.5
+            return +1.5
         self.position = 2
         return 0
 
@@ -192,7 +190,7 @@ class stablebaselineEnv(gym.Env):
         reward = 0
         if action == 0 or action == 1:  # Long or Short
             if self.position == action or self.position == 2 or self.position is None:
-                self.open_position(action)
+                self.open_position(action)  
             else:
                 self.close_position()
                 reward = self.calculate_reward(action)
@@ -237,14 +235,81 @@ class stablebaselineEnv(gym.Env):
     def step(self, action):
         self.get_price()
         action, reward = self.act(action)
-        done = self.next_obs()
+        self.next_obs()
+        self.action_history.loc[len(self.action_history)] = [self.obs_window.index[-1], action]
+        if self.obs_window.index[-1] == self.full_window.index[-1]:
+            done = True
+        else:
+            done = False
         info = {}
         return self.get_obs(), reward, done, info
     
-df = pd.read_csv(r'C:\Users\user\Documents\GitHub\RL_Quant\btctest.csv')
-env = stablebaselineEnv(df, full_window_size=100, obs_window_size=50, usdt_balance=1000)
+    def render(self, render_mode=None):
+        font = 'Verdana'
+        if render_mode == "human":
+            candle = go.Candlestick(open=self.full_window['Open'], high=self.full_window['High'], low=self.full_window['Low'], close=self.full_window['Close'],
+                                    increasing_line_color='rgb(38, 166, 154)', increasing_fillcolor='rgb(38, 166, 154)',
+                                    decreasing_line_color='rgb(239, 83, 80)', decreasing_fillcolor='rgb(239, 83, 80)', yaxis='y2')
+            fig = go.Figure(data=[candle])
 
-model = PPO("MultiInputPolicy", env, verbose=1, tensorboard_log="./ppo_tensorboard/")
+            # action DataFrame의 각 행에 대해 반복
+            # for index, row in self.action_history.iterrows():
+            #     if index in self.obs_window.index:
+            #         x_position = self.obs_window.index.get_loc(index)  # x축 위치 결정
+
+            #         if row['action'] == 0:
+            #             # 위로 향한 빨간 삼각형
+            #             fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(38, 166, 154, 0.3)", width=8))
+            #         elif row['action'] == 1:
+            #             # 아래로 향한 파란 삼각형
+            #             fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(239, 83, 80, 0.3)", width=8))
+            #         elif row['action'] == 2:
+            #             # 초록색 선
+            #             fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(0, 255, 0,0.3)", width=8))
+
+            # start_step 선과 텍스트 추가
+
+            # 시작선
+            fig.add_shape(type="line", x0=self.obs_window_size, y0=0, x1=self.obs_window_size, y1=1, xref='x', yref='paper', line=dict(color="rgb(255, 183, 77)", width=1))
+            fig.add_annotation(x=self.obs_window_size, y=1, text="Start", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="rgb(255, 183, 77)", arrowsize=1.1, arrowwidth=2, ax=-20, ay=-30,
+                                font=dict(family=font, size=12, color="rgb(255, 183, 77)"), align="center")
+
+            # 현재 step 선
+            fig.add_shape(type="line", x0=self.obs_window.index[-1], y0=0, x1=self.obs_window.index[-1], y1=1, xref='x', yref='paper', line=dict(color="rgb(255, 183, 77)", width=1))
+            fig.add_annotation(x=self.obs_window.index[-1], y=1, text="Now", showarrow=True, arrowhead=1, xref="x", yref="paper", arrowcolor="rgb(255, 183, 77)", arrowsize=1.1, arrowwidth=2, ax=20, ay=-30,
+                                font=dict(family=font, size=12, color="rgb(255, 183, 77)"), align="center")
+
+            # 레이아웃 업데이트
+            fig.update_layout(
+                height=900,
+                width=1800,
+                plot_bgcolor='rgb(13, 14, 20)',
+                xaxis=dict(domain=[0, 1]),
+                yaxis=dict(title='Net Worth', side='right', overlaying='y2'),
+                yaxis2=dict(title='Price', side='left'),
+                title='RL 차트',
+                template='plotly_dark'
+            )
+
+            fig.show()
+
+class RenderCallback(BaseCallback):
+    def __init__(self, env, render_freq=1000):
+        super().__init__()
+        self.env = env
+        self.render_freq = render_freq
+        self.episode_count = 0
+
+    def _on_step(self):
+        if self.n_calls % self.render_freq == 0:
+            self.env.render(render_mode="human")
+        return True
+
+# df = pd.read_csv(r'C:\Users\user\Documents\GitHub\RL_Quant\btctest.csv') # 회사
+df = pd.read_csv(r'C:\Users\dyd46\Documents\GitHub\RL_Quant\btctest.csv') # 집
+env = stablebaselineEnv(df, full_window_size=200, obs_window_size=50, usdt_balance=1000)
+
+model = PPO("MultiInputPolicy", env, verbose=1)
 obs = env.reset()
-model.learn(total_timesteps=10000)
-    
+render_callback = RenderCallback(env, render_freq=1000)
+model.learn(total_timesteps=2000, callback=render_callback)
