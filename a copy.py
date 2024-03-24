@@ -57,8 +57,11 @@ class stablebaselineEnv(gym.Env):
         self.closing_pnl = 0 # 실현 손익
         self.total_pnl = 0 # 누적 손익
         self.total_fee = 0 # 누적 수수료
-        self.total_balance = 0 # 총 자산
-        self.previous_total_balance = 0  # 이전 총 자산
+        self.total_balance = usdt_balance # 총 자산
+        self.previous_total_balance = usdt_balance  # 이전 총 자산
+        
+        # 액션 관련 변수
+        self.hold_count = 0
         
         # 랜더링 관련 변수
         self.action_history = pd.DataFrame(columns=['step', 'action'])
@@ -70,7 +73,7 @@ class stablebaselineEnv(gym.Env):
         self.current_price = self.get_price()
         
         self.leverage = self.leverage # 레버리지
-        self.usdt_balance = self.usdt_balance # 초기 usdt 잔고
+        self.usdt_balance = self.initial_usdt_balance # 초기 usdt 잔고
         self.btc_size = self.btc_size # 포지션 수량
         self.margin = 0 # 포지션 증거금
         self.position = 2 # 포지션 {0:Long, 1:Short, 2:None}
@@ -81,9 +84,10 @@ class stablebaselineEnv(gym.Env):
         self.closing_pnl = 0 # 실현 손익
         self.total_pnl = 0 # 누적 손익
         self.total_fee = 0 # 누적 수수료
-        self.total_balance = 0 # 총 자산
-        self.previous_total_balance = 0  # 이전 총 자산
+        self.total_balance = self.initial_usdt_balance # 총 자산
+        self.previous_total_balance = self.initial_usdt_balance  # 이전 총 자산
         
+        self.action_history = pd.DataFrame(columns=['step', 'action'])
         return self.get_obs()
         
     def generate_random_data_slice(self):
@@ -153,7 +157,7 @@ class stablebaselineEnv(gym.Env):
 
         self.total_fee -= open_fee
         self.total_balance = self.usdt_balance + self.margin
-        self.previous_total_balance = self.total_balance
+        # self.previous_total_balance = self.total_balance
         self.position = action
 
     def close_position(self):
@@ -173,34 +177,34 @@ class stablebaselineEnv(gym.Env):
 
         self.total_balance = self.usdt_balance + self.margin
 
-    def calculate_reward(self, action):
-        if self.total_balance <= self.previous_total_balance: # 이전 총 자산보다 현재 총 자산이 작거나 같을 경우
-            return -1
-
-        if action == 2: # Close
-            return +1.5
-
-        if (action == 0 and self.position == 1) or (action == 1 and self.position == 0):
-            return +1.5
-        self.position = 2
-        return 0
+    # def calculate_reward(self, action):
+    #     reward = 0
+    #     if self.total_balance <= self.previous_total_balance: # 이전 총 자산보다 현재 총 자산이 작거나 같을 경우
+    #         reward -= 1
+    #         return reward
+    #     else:
+    #         reward += 1
+    #         return reward
 
     def act(self, action):
         action = self.act_check(action)
-        reward = 0
+        # reward = 0
         if action == 0 or action == 1:  # Long or Short
             if self.position == action or self.position == 2 or self.position is None:
                 self.open_position(action)  
+                self.hold_count = 0
             else:
                 self.close_position()
-                reward = self.calculate_reward(action)
+                # reward = self.calculate_reward(action)
                 self.open_position(action)
+                self.hold_count = 0
 
         elif action == 2:  # Close
             if self.position == 0 or self.position == 1:
                 self.close_position()
                 self.position = 2
-                reward = self.calculate_reward(action)
+                self.hold_count = 0
+                # reward = self.calculate_reward(action)
 
         elif action == 3:  # Hold
             if self.position == 0:  # Long
@@ -209,8 +213,9 @@ class stablebaselineEnv(gym.Env):
                 self.pnl = (self.current_avg_price - self.current_price) * self.btc_size * self.leverage
             self.total_balance = self.usdt_balance + self.margin
             reward = 0
+            self.hold_count += 1
             
-        return action , reward
+        return action
     
     def get_obs(self, action=3):
         obs = {
@@ -234,7 +239,7 @@ class stablebaselineEnv(gym.Env):
     
     def step(self, action):
         self.get_price()
-        action, reward = self.act(action)
+        action = self.act(action)
         self.next_obs()
         self.action_history.loc[len(self.action_history)] = [self.obs_window.index[-1], action]
         if self.obs_window.index[-1] == self.full_window.index[-1]:
@@ -242,6 +247,14 @@ class stablebaselineEnv(gym.Env):
         else:
             done = False
         info = {}
+        reward = 0
+        if self.total_balance <= self.previous_total_balance:
+            reward -= 1
+        else:
+            reward += 1
+        self.previous_total_balance = self.total_balance
+        if self.hold_count > 50:
+            reward -= 2
         return self.get_obs(), reward, done, info
     
     def render(self, render_mode=None):
@@ -253,21 +266,20 @@ class stablebaselineEnv(gym.Env):
             fig = go.Figure(data=[candle])
 
             # action DataFrame의 각 행에 대해 반복
-            # for index, row in self.action_history.iterrows():
-            #     if index in self.obs_window.index:
-            #         x_position = self.obs_window.index.get_loc(index)  # x축 위치 결정
+            for _, row in self.action_history.iterrows():
+                step = row['step']
+                if step in self.full_window.index:
+                    x_position = self.full_window.index.get_loc(step)  # x축 위치 결정
 
-            #         if row['action'] == 0:
-            #             # 위로 향한 빨간 삼각형
-            #             fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(38, 166, 154, 0.3)", width=8))
-            #         elif row['action'] == 1:
-            #             # 아래로 향한 파란 삼각형
-            #             fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(239, 83, 80, 0.3)", width=8))
-            #         elif row['action'] == 2:
-            #             # 초록색 선
-            #             fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(0, 255, 0,0.3)", width=8))
-
-            # start_step 선과 텍스트 추가
+                    if row['action'] == 0:
+                        # 위로 향한 빨간 삼각형
+                        fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(38, 166, 154, 0.3)", width=8))
+                    elif row['action'] == 1:
+                        # 아래로 향한 파란 삼각형
+                        fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(239, 83, 80, 0.3)", width=8))
+                    elif row['action'] == 2:
+                        # 초록색 선
+                        fig.add_shape(type="line", x0=x_position, y0=0, x1=x_position, y1=1, xref='x', yref='paper', line=dict(color="rgba(0, 255, 0,0.3)", width=8))
 
             # 시작선
             fig.add_shape(type="line", x0=self.obs_window_size, y0=0, x1=self.obs_window_size, y1=1, xref='x', yref='paper', line=dict(color="rgb(255, 183, 77)", width=1))
@@ -294,7 +306,7 @@ class stablebaselineEnv(gym.Env):
             fig.show()
 
 class RenderCallback(BaseCallback):
-    def __init__(self, env, render_freq=1000):
+    def __init__(self, env, render_freq):
         super().__init__()
         self.env = env
         self.render_freq = render_freq
@@ -307,9 +319,13 @@ class RenderCallback(BaseCallback):
 
 # df = pd.read_csv(r'C:\Users\user\Documents\GitHub\RL_Quant\btctest.csv') # 회사
 df = pd.read_csv(r'C:\Users\dyd46\Documents\GitHub\RL_Quant\btctest.csv') # 집
-env = stablebaselineEnv(df, full_window_size=200, obs_window_size=50, usdt_balance=1000)
+full_window_size = 200
+obs_window_size = 50
+env = stablebaselineEnv(df, full_window_size, obs_window_size, usdt_balance=1000)
 
 model = PPO("MultiInputPolicy", env, verbose=1)
 obs = env.reset()
-render_callback = RenderCallback(env, render_freq=1000)
-model.learn(total_timesteps=2000, callback=render_callback)
+render_callback = RenderCallback(env, render_freq=149*10)
+
+model.learn(total_timesteps=150*1000)
+# , callback=render_callback
