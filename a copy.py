@@ -16,6 +16,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 class stablebaselineEnv(gym.Env):
     def __init__(self, df, full_window_size, obs_window_size, usdt_balance, btc_size=0, leverage=1): 
         super(stablebaselineEnv, self).__init__()
+        
         # 데이터 처리 변수
         self.df = df
         self.full_window_size = full_window_size
@@ -51,12 +52,10 @@ class stablebaselineEnv(gym.Env):
         self.margin = 0 # 포지션 증거금
         self.position = 2 # 포지션 {0:Long, 1:Short, 2:None}
         self.order_price = 0 # 주문 금액
-        self.last_size_value = 0 # (평단가 계산에 필요)
         self.current_avg_price = 0 # 현재 평단가
-        self.pnl = 0 # 미실현 손익
-        self.closing_pnl = 0 # 실현 손익
-        self.total_pnl = 0 # 누적 손익
-        self.total_fee = 0 # 누적 수수료
+        self.unrealized_pnl = 0 # 미실현 손익
+        self.realized_pnl = 0 # 실현 손익
+        self.max_pnl = 0 # 최대 손익
         self.total_balance = usdt_balance # 총 자산
         self.previous_total_balance = usdt_balance  # 이전 총 자산
         
@@ -71,19 +70,17 @@ class stablebaselineEnv(gym.Env):
         self.full_window, self.obs_window = self.generate_random_data_slice()
         self.current_step = self.obs_window.tail(1)
         self.current_price = self.get_price()
-        
+    
         self.leverage = self.leverage # 레버리지
         self.usdt_balance = self.initial_usdt_balance # 초기 usdt 잔고
         self.btc_size = self.btc_size # 포지션 수량
         self.margin = 0 # 포지션 증거금
         self.position = 2 # 포지션 {0:Long, 1:Short, 2:None}
         self.order_price = 0 # 주문 금액
-        self.last_size_value = 0 # (평단가 계산에 필요)
         self.current_avg_price = 0 # 현재 평단가
-        self.pnl = 0 # 미실현 손익
-        self.closing_pnl = 0 # 실현 손익
-        self.total_pnl = 0 # 누적 손익
-        self.total_fee = 0 # 누적 수수료
+        self.unrealized_pnl = 0 # 미실현 손익
+        self.realized_pnl = 0 # 실현 손익
+        self.max_pnl = 0 # 최대 손익
         self.total_balance = self.initial_usdt_balance # 총 자산
         self.previous_total_balance = self.initial_usdt_balance  # 이전 총 자산
         
@@ -106,117 +103,74 @@ class stablebaselineEnv(gym.Env):
         close = self.full_window.iloc[self.obs_window.index[-1]+1]['Close']
         self.current_price = round(random.uniform(open, close), 2)
         return self.current_price
-    
-    
-    # 나중에 수량지정을 위한 함수 (min_order부분만 바꾸면됌)
-    def cac_order_size(self): 
-        order_size = self.min_order
-        return order_size
-    
-    # action을 수행할 수 있는 최소한의 조건 확인
-    def act_check(self, action):
-        required_margin = (self.cac_order_size() * self.current_price) / self.leverage
+
+    def reward(self, action):
+        reward = 0
+        if self.unrealized_pnl > 0:
+            reward += self.unrealized_pnl
+        else:
+            reward += self.unrealized_pnl * 2
+            
+        if action == 2 and self.realized_pnl > 0:
+            reward += self.realized_pnl
+
+        if action == 2:
+            reward = self.realized_pnl - self.max_pnl
+        else:
+            pass
         
-        if action == 0 or action == 1:
-            if self.position == action or self.position == 2 or self.position is None:
-                if self.usdt_balance > required_margin:
-                    return action
-                else:
-                    return 3
-            else:
-                if self.usdt_balance + self.margin + self.pnl > required_margin:
-                    return action
-                else:
-                    return 3
-        
-        elif action == 2:
-            if self.position == 0 or self.position == 1:
-                return 2
-            else:
-                return 3
-        
-        elif action == 3 or self.position is None:
-            return 3
-
-    # 포지션 진입
-    def open_position(self, action):
-        order_size = self.cac_order_size()
-        required_margin = (order_size * self.current_price) / self.leverage
-        open_fee = order_size * self.current_price * self.fee
-
-        self.usdt_balance -= required_margin + open_fee
-        self.btc_size += order_size
-        self.margin += required_margin
-
-        self.order_price = order_size * self.current_price
-        self.current_avg_price = (self.order_price + self.last_size_value) / self.btc_size
-        self.last_size_value = self.btc_size * self.current_price
-
-        self.pnl = (1 if action == 0 else -1) * (
-                self.current_price - self.current_avg_price) * self.btc_size * self.leverage
-
-        self.total_fee -= open_fee
-        self.total_balance = self.usdt_balance + self.margin
-        # self.previous_total_balance = self.total_balance
-        self.position = action
-
-    def close_position(self):
-        closing_fee = self.btc_size * self.current_price * self.fee
-        closing_pnl = (1 if self.position == 0 else -1) * (
-                self.current_price - self.current_avg_price) * self.btc_size * self.leverage
-
-        self.usdt_balance += self.margin + closing_pnl - closing_fee
-        self.total_fee -= closing_fee
-        self.total_pnl += closing_pnl
-        self.closing_pnl = closing_pnl
-
-        self.btc_size = 0
-        self.margin = 0
-        self.pnl = 0
-        self.last_size_value = 0
-
-        self.total_balance = self.usdt_balance + self.margin
-
-    # def calculate_reward(self, action):
-    #     reward = 0
-    #     if self.total_balance <= self.previous_total_balance: # 이전 총 자산보다 현재 총 자산이 작거나 같을 경우
-    #         reward -= 1
-    #         return reward
-    #     else:
-    #         reward += 1
-    #         return reward
+        return reward
 
     def act(self, action):
-        action = self.act_check(action)
-        # reward = 0
-        if action == 0 or action == 1:  # Long or Short
-            if self.position == action or self.position == 2 or self.position is None:
-                self.open_position(action)  
-                self.hold_count = 0
+        # 행동
+        self.current_price = self.get_price()
+        size = round(self.usdt_balance / self.current_price, 3)
+        if (action == 0 or action == 1) and self.position == 2:
+            if self.usdt_balance > size * self.current_price:
+                fee = size * self.fee
+                self.position_size += size
+                self.margin += (size * self.current_price) / self.leverage
+                self.usdt_balance -= self.margin + fee
+                self.position = action
             else:
-                self.close_position()
-                # reward = self.calculate_reward(action)
-                self.open_position(action)
-                self.hold_count = 0
-
-        elif action == 2:  # Close
-            if self.position == 0 or self.position == 1:
-                self.close_position()
-                self.position = 2
-                self.hold_count = 0
-                # reward = self.calculate_reward(action)
-
-        elif action == 3:  # Hold
-            if self.position == 0:  # Long
-                self.pnl = (self.current_price - self.current_avg_price) * self.btc_size * self.leverage
-            elif self.position == 1:  # Short
-                self.pnl = (self.current_avg_price - self.current_price) * self.btc_size * self.leverage
-            self.total_balance = self.usdt_balance + self.margin
-            reward = 0
-            self.hold_count += 1
+                action = 3
             
-        return action
+        elif action == 2 and self.position != 2:
+            fee = self.btc_size * self.fee
+            self.usdt_balance += (self.position_size * self.current_price) - fee
+            self.position_size = 0
+            self.margin = 0
+            self.position = action
+        else:
+            action = 3
+        
+        # 포트폴리오 가치 계산
+        self.current_avg_price = ((self.current_avg_price * (self.btc_size - size)) + (self.current_price * size)) / self.btc_size # 평단가 계산
+        
+        if self.current_avg_price != 0: # 미실현 손익 계산
+            self.unrealized_pnl = round((self.current_price - self.current_avg_price) / self.current_avg_price * 100, 2)
+            self.max_pnl = max(self.max_pnl, self.unrealized_pnl)
+        else:
+            self.unrealized_pnl = 0
+            self.max_pnl = 0
+            
+        if action == 2: # 실현 손익 계산
+            self.realized_pnl = self.unrealized_pnl
+        else:
+            self.realized_pnl = 0
+            
+        self.total_balance = self.usdt_balance + self.margin # 총 자산 계산
+        
+        reward = self.reward(action) # 보상 계산
+        return action, reward
     
+    " act : 행동 -> 평단가 계산 -> 미실현 손익 계산 -> 실현 손익 계산 -> 총 자산 계산 -> 보상 계산 "
+        
+
+            
+        
+            
+
     def get_obs(self, action=3):
         obs = {
             "chart_data": self.obs_window.values,
